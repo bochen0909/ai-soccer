@@ -73,17 +73,40 @@ Tuning and evaluation
 - [ ] Elo or win-rate report in `evaluate` for comparing controllers
 
 Environment
-- [ ] Scripted-policy sanity checks (step 2 above)
-- [ ] Drill scenarios for curriculum learning
+- [x] Scripted-policy sanity checks: `npm run check-env` (idle, random and chase policies at 5v5 and 11v11; return equals score difference with shaping off, masks always allow "none", observations bounded)
+- [x] Drill scenarios: `shoot` and `attack` (2v1) in `src/training/drills.ts`
+- [ ] Easier attack drill ladder and pass-completion reward (see RL results)
 - [ ] Fast-forward dead phases (goal pause, halftime, restart placement) so steps are not wasted on them
 - [ ] Opponent can be a second `external` team (self-play)
 - [ ] Per-agent rewards if the shared team reward turns out to be too coarse for credit assignment
 
 Training infrastructure
-- [ ] stdio or socket bridge, Gymnasium wrapper in Python
-- [ ] Persistent worker pool, batched stepping
+- [x] stdio bridge (`scripts/env-server.mjs`) and Python client (`python/soccer_env.py`); no Gymnasium dependency, a vectorized client with masks and auto-reset
+- [x] Persistent worker pool: several Node processes, several environments each, batched stepping (about 2,500 to 3,000 steps per second on 12 cores)
 - [ ] Throughput target and profiling (the learner decides every tick, and cloning observations per tick is the main overhead)
 - [ ] Policy export and in-engine inference as a controller plugin (for example ONNX)
+
+## RL results so far
+
+Everything below used the PPO trainer (`python/train_ppo.py`) with one shared network over all five players, masked action heads, 16 parallel matches and about 2,500 to 3,000 steps per second.
+
+| Run | Setup | Result |
+| --- | --- | --- |
+| run2 | Full 5v5 matches against the default CPU, shaped reward, 200 iterations (about 400,000 steps) | Flat. Evaluation goal difference stayed between -3 and -6 per match against the default CPU and between -10 and -14 against Hard (the starting policy scores about -5 and -12). Entropy fell only slightly, from 2.89 to 2.66 |
+| shoot1 | Shooting drill: striker with the ball 8 to 16 m out against the keeper, 6 s episodes, 200 iterations | Learned within about 20 iterations, then plateaued at 50 to 70% scoring. For comparison: idle 0%, random 12%, scripted "shoot centre" 5 to 35%, scripted "shoot at a corner from 12 to 16 m" about 58 to 60%. The policy has matched the best simple rule, mostly by aiming at corners |
+| attack1 | 2v1 attack drill, started from the shooting policy, 250 iterations | 0 to 4% scoring throughout. A scripted run-and-shoot policy scores 0 to 5%, so the drill can only be solved by passing or dribbling past the defender, and the reward arrives only after a whole pass, run and shot line up |
+
+What this tells us:
+- The pipeline works end to end: environment, masks, bridge, trainer, drills and evaluation.
+- Dense, short tasks are learned in minutes. Full matches and multi-step plays need more than plain PPO from scratch with a goals-only signal.
+- The default keeper almost always stops centre shots and often misses corner shots. Corner placement is the main skill the shooting drill taught.
+
+Next, in the order I'd try them:
+1. **Easier attack drill ladder.** Start with the defender absent and a pass to the runner required, then add the defender. Add a pass-completion bonus, such as a reward when a pass reaches a teammate who then has a shot.
+2. **Longer and larger runs** once a drill moves, with more parallel environments, and a tuned entropy coefficient.
+3. **Reward shaping for full matches:** shots on target, passes received, and tackles won, annealed with `shapingScale`.
+4. **Imitation start:** behavior-clone the tuned CPU's decisions (hard to beat as a teacher, since it wins 297 of 300 against the default) and then fine-tune with RL.
+5. **Evolution on the network weights** as an alternative to PPO, using the same environment.
 
 ## Known issues
 
