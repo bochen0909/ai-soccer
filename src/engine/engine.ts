@@ -3,9 +3,9 @@ import type {
   RenderSnapshot, ScenarioDefinition, TeamId, TeamObservation, TickResult,
 } from "../contracts/index.js";
 import {
-  interruptLaunches, normalizeFrame, processActions, restrictMovement,
+  interruptActions, normalizeFrame, processActions, restrictMovement,
 } from "./actions.js";
-import type { EventData, Launches } from "./actions.js";
+import type { EventData, ActionSlots } from "./actions.js";
 import { advancePhysics } from "./physics.js";
 import type { PhysicsOutcome } from "./physics.js";
 import { buildResetState, placeRestart } from "./reset.js";
@@ -66,6 +66,9 @@ function endPeriod(state: EngineState): void {
     ? { kind: "halftime", untilTick: state.tick + state.config.rules.halftimeTicks }
     : { kind: "fullTime" };
   state.ball.control = { kind: "free" };
+  delete state.ball.flightAction;
+  state.touchExclusion = null;
+  state.nextDribbleTouchTick = 0;
   state.keeperReleaseTick = null;
 }
 
@@ -84,12 +87,12 @@ function advancePause(state: EngineState, startingPhase: MatchPhase): void {
 
 export class SoccerEngine implements MatchEngine {
   private state?: EngineState;
-  private launches: Launches = new Map();
+  private slots: ActionSlots = new Map();
 
   reset(config: MatchConfig, seed: number, scenario?: ScenarioDefinition): void {
     const initial = buildResetState(config, seed, scenario);
     this.state = initial;
-    this.launches = new Map();
+    this.slots = new Map();
   }
 
   private requireState(): EngineState {
@@ -100,12 +103,13 @@ export class SoccerEngine implements MatchEngine {
   private view(state: EngineState): RenderSnapshot {
     const { tick, phase, period, remainingPeriodTicks, score, attackDirections, ball } = state;
     const players = state.players.map((player) => {
-      const launch = this.launches.get(player.playerId);
+      const pending = this.slots.get(player.playerId);
       return {
         ...player,
-        action: launch ? {
-          key: launch.action, kind: launch.request.kind, phase: launch.phase,
-          contactTick: launch.contactTick, readyTick: launch.readyTick,
+        action: pending ? {
+          key: pending.action, kind: pending.request.kind, phase: pending.phase,
+          contactTick: pending.contactTick, readyTick: pending.readyTick,
+          activeUntilTick: pending.phase === "active" ? pending.activeUntilTick : undefined,
         } : undefined,
       };
     });
@@ -129,26 +133,26 @@ export class SoccerEngine implements MatchEngine {
     if (current.phase.kind === "fullTime") throw new Error("The match has finished");
     const actions = normalizeFrame(current, frame);
     const state = stageTick(current);
-    const launches = new Map(this.launches);
+    const slots = new Map(this.slots);
     const events: EventData[] = [];
     const actionResults: ActionResult[] = [];
     const diagnostics: EngineDiagnostic[] = [];
-    processActions(state, launches, actions, events, actionResults, diagnostics);
+    processActions(state, slots, actions, events, actionResults, diagnostics);
 
     let physics: PhysicsOutcome | undefined;
     if (state.phase.kind === "live") {
-      restrictMovement(launches, actions);
-      physics = advancePhysics(state, actions);
+      restrictMovement(slots, actions);
+      physics = advancePhysics(state, { actions, slots, events, results: actionResults });
     }
     state.tick += 1;
     if (physics && physics.elapsedSeconds > 0) state.remainingPeriodTicks -= 1;
 
     const afterCrossing = physics?.crossing && recordCrossing(state, physics.crossing, events);
     if (state.remainingPeriodTicks === 0 && state.phase.kind === "live") {
-      interruptLaunches(launches, state.tick, actionResults);
+      interruptActions(slots, state.tick, actionResults);
       endPeriod(state);
     } else if (afterCrossing) {
-      interruptLaunches(launches, state.tick, actionResults);
+      interruptActions(slots, state.tick, actionResults);
       afterCrossing();
     } else {
       advancePause(state, current.phase);
@@ -157,7 +161,7 @@ export class SoccerEngine implements MatchEngine {
     state.events = events.map((event, ordinal): MatchEvent => ({ ...event, tick: state.tick, ordinal }));
 
     this.state = state;
-    this.launches = launches;
+    this.slots = slots;
     return structuredClone({
       tick: state.tick, events: state.events, actionResults, diagnostics,
       status: state.phase.kind === "fullTime" ? "finished" : "running",
@@ -170,7 +174,7 @@ export class SoccerEngine implements MatchEngine {
     const serialized = JSON.stringify({
       ...state,
       requestIds: state.players.map(({ playerId }) => state.requestIds.get(playerId) ?? 0),
-      launches: state.players.map(({ playerId }) => this.launches.get(playerId) ?? null),
+      slots: state.players.map(({ playerId }) => this.slots.get(playerId) ?? null),
     });
     let hash = 0xcbf29ce484222325n;
     for (let index = 0; index < serialized.length; index += 1) {

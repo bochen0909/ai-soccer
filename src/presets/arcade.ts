@@ -1,4 +1,5 @@
 import type { MatchConfig, PlayerDefinition, TeamDefinition } from "../contracts/index.js";
+import { createPlayerAbilities } from "./players.js";
 
 function team(id: string): TeamDefinition {
   const positions = [
@@ -10,6 +11,8 @@ function team(id: string): TeamDefinition {
   ];
   const players = positions.map((formation, index): PlayerDefinition => {
     const keeper = index === 0;
+    const abilities = createPlayerAbilities();
+    if (keeper) abilities.technical.goalkeeping = 0.72;
     return {
       id: keeper ? `${id}-keeper` : `${id}-${index}`,
       role: keeper ? "goalkeeper" : "outfield",
@@ -18,30 +21,7 @@ function team(id: string): TeamDefinition {
       radiusM: 0.32,
       massKg: 72,
       preferredFoot: "right",
-      abilities: {
-        physical: {
-          maxSpeedMps: 7.5,
-          accelerationMps2: 6,
-          brakingMps2: 9,
-          turnRateRadPerSec: 7,
-          maxKickSpeedMps: 28,
-          maxThrowInSpeedMps: 14,
-          maxKeeperRollSpeedMps: 12,
-          maxKeeperThrowSpeedMps: 20,
-          reachM: 0.95,
-          staminaDrainPerSec: 0.065,
-          staminaRecoveryPerSec: 0.04,
-        },
-        technical: {
-          passing: 0.7,
-          shooting: 0.65,
-          firstTouch: 0.65,
-          dribbling: 0.65,
-          tackling: 0.6,
-          goalkeeping: keeper ? 0.72 : 0.2,
-          weakFoot: 0.65,
-        },
-      },
+      abilities,
     };
   });
   return { id, players };

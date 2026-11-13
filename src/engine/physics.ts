@@ -1,4 +1,10 @@
-import type { PlayerAction, PlayerId, PlayerState, Vec2, Vec3 } from "../contracts/index.js";
+import type { ActionResult, PlayerAction, PlayerId, PlayerState, Vec2, Vec3 } from "../contracts/index.js";
+import { dueLaunch, finishDefenseContact, interruptAction, resolveLaunch } from "./actions.js";
+import type { ActionSlots, EventData, PendingAction } from "./actions.js";
+import { applyDribbleTouch, firstTouchCandidate, resolveFirstTouch, updateDribbleControl } from "./ball-control.js";
+import { defenseCandidate, isDefenseRequest, resolveDefense } from "./defense.js";
+import type { DefenseRequest } from "./defense.js";
+import { randomUnit } from "./random.js";
 import {
   CONTACT_TIME_TOLERANCE,
   along,
@@ -10,7 +16,7 @@ import {
   sweepCapsule,
 } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
-import { attackDirection, inDribbleReach, keeperHoldPosition } from "./reset.js";
+import { attackDirection, keeperHoldPosition } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
 export const PHYSICS_TICK_SECONDS = 1 / 60;
@@ -44,9 +50,12 @@ export class PhysicsError extends Error {
 type PhysicsEvent = { time: number } & (
   | { kind: "crossing"; axis: Axis; side: Side; plane: number }
   | { kind: "ground" }
-  | { kind: "ballContact"; normal: Vec3; player?: PlayerState }
+  | { kind: "ballContact"; normal: Vec3; collider: Capsule | PlayerState; player?: PlayerState }
   | { kind: "wall"; player: PlayerState; axis: Axis; plane: number }
   | { kind: "playerContact"; first: PlayerState; second: PlayerState }
+  | { kind: "firstTouch"; player: PlayerState }
+  | { kind: "defense"; player: PlayerState; pending: PendingAction; request: DefenseRequest }
+  | { kind: "launch"; player: PlayerState }
 );
 
 interface PlayerBounds {
@@ -54,11 +63,25 @@ interface PlayerBounds {
   max: Vec2;
 }
 
-export function advancePhysics(state: EngineState, actions: ReadonlyMap<PlayerId, PlayerAction>): PhysicsOutcome {
+interface TickPlay {
+  actions: ReadonlyMap<PlayerId, PlayerAction>;
+  slots: ActionSlots;
+  events: EventData[];
+  results: ActionResult[];
+}
+
+export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutcome {
+  const { actions, slots, events, results } = play;
   const goalFrames = goalFrameCapsules(state.config.pitch);
-  const bounds = state.players.map((player) => movementBounds(state, player));
   const substepSeconds = PHYSICS_TICK_SECONDS / SUBSTEPS;
   let elapsedSeconds = 0;
+  let firstTouchAvailable = true;
+
+  updateDribbleControl(state, events);
+  const control = state.ball.control;
+  if (control.kind === "dribble" && slots.get(control.playerId)?.phase !== "windup") {
+    applyDribbleTouch(state, actions, events);
+  }
 
   for (let substep = 0; substep < SUBSTEPS; substep++) {
     for (const player of state.players) {
@@ -68,28 +91,69 @@ export function advancePhysics(state: EngineState, actions: ReadonlyMap<PlayerId
 
     let remaining = substepSeconds;
     let eventCount = 0;
-    // A contact on the tick boundary can leave a second event at the same instant.
+    const ballContacts = new Set<Capsule | PlayerState>();
     while (true) {
-      const event = findNextEvent(state, goalFrames, bounds, remaining);
+      const event = findNextEvent(state, goalFrames, remaining, play, firstTouchAvailable, ballContacts);
       const duration = event === undefined ? remaining : Math.min(event.time, remaining);
       moveBodies(state, duration);
       elapsedSeconds += duration;
       remaining = Math.max(0, remaining - duration);
       if (event === undefined) break;
       if (++eventCount > MAX_EVENTS_PER_SUBSTEP) throw new PhysicsError(state.tick);
+      if (duration > CONTACT_TIME_TOLERANCE) ballContacts.clear();
+      if (event.kind === "ballContact") ballContacts.add(event.collider);
 
       if (event.kind === "crossing") {
         state.ball.position[event.axis] = event.plane;
         updatePlayerState(state, actions, elapsedSeconds);
+        updateDribbleControl(state, events);
         return { elapsedSeconds, crossing: classifyCrossing(state, event.axis, event.side) };
       }
-      resolveContact(state, event);
+      switch (event.kind) {
+        case "firstTouch":
+          firstTouchAvailable = false;
+          resolveFirstTouch(state, event.player, actions.get(event.player.playerId), events);
+          break;
+        case "defense": {
+          const { pending, request } = event;
+          const previous = state.ball.control;
+          const flight = state.ball.flightAction;
+          const position = { ...state.ball.position };
+          const outcome = resolveDefense(state, event.player, request);
+          finishDefenseContact(state, slots, pending, events, outcome, position, flight);
+          if (previous.kind === "dribble" && previous.playerId !== event.player.playerId) {
+            events.push({ kind: "possessionLost", playerId: previous.playerId, position });
+            interruptAction(state, slots, previous.playerId, results,
+              request.kind === "tackle" ? "tackled" : "ballUnavailable");
+          }
+          firstTouchAvailable = false;
+          break;
+        }
+        case "launch":
+          resolveLaunch(state, slots, event.player, events, results);
+          break;
+        default:
+          resolveContact(state, event, events);
+      }
+      updateDribbleControl(state, events);
     }
+    updateDribbleControl(state, events);
   }
 
   updatePlayerState(state, actions, PHYSICS_TICK_SECONDS);
   return { elapsedSeconds: PHYSICS_TICK_SECONDS };
 }
+
+const eventPriority: Record<PhysicsEvent["kind"], number> = {
+  wall: 0,
+  ground: 0,
+  ballContact: 0,
+  playerContact: 0,
+  defense: 1,
+  launch: 2,
+  firstTouch: 3,
+  crossing: 4,
+};
 
 function applyMovement(player: PlayerState, action: PlayerAction | undefined, seconds: number): void {
   const { maxSpeedMps, accelerationMps2, brakingMps2 } = player.definition.abilities.physical;
@@ -148,21 +212,28 @@ function applyBallForces(state: EngineState, seconds: number): void {
 function findNextEvent(
   state: EngineState,
   goalFrames: readonly Capsule[],
-  bounds: readonly PlayerBounds[],
   duration: number,
+  play: TickPlay,
+  firstTouchAvailable: boolean,
+  ballContacts: ReadonlySet<Capsule | PlayerState>,
 ): PhysicsEvent | undefined {
   let first: PhysicsEvent | undefined;
+  let tied: PhysicsEvent[] = [];
   const consider = (event: PhysicsEvent): void => {
     if (event.time > duration) return;
+    const simultaneous = first !== undefined && Math.abs(event.time - first.time) <= CONTACT_TIME_TOLERANCE;
     if (first === undefined || event.time < first.time - CONTACT_TIME_TOLERANCE ||
-        (first.kind === "crossing" && event.kind !== "crossing" &&
-          event.time <= first.time + CONTACT_TIME_TOLERANCE)) {
+        (simultaneous && eventPriority[event.kind] < eventPriority[first.kind])) {
       first = event;
+      tied = [];
+    } else if (simultaneous && (event.kind === "firstTouch" || event.kind === "defense") &&
+        first.kind === event.kind) {
+      tied.push(event);
     }
   };
 
   for (const [index, player] of state.players.entries()) {
-    const limit = bounds[index]!;
+    const limit = movementBounds(state, player);
     for (const axis of ["x", "y"] as const) {
       const velocity = player.velocity[axis];
       if (Math.abs(velocity) <= VELOCITY_TOLERANCE) continue;
@@ -180,6 +251,9 @@ function findNextEvent(
     }
   }
 
+  for (const player of state.players) {
+    if (dueLaunch(state, play.slots.get(player.playerId))) consider({ time: 0, kind: "launch", player });
+  }
   if (state.ball.control.kind === "keeperHeld") return first;
   const { position, velocity } = state.ball;
   const { radiusM } = state.config.ball;
@@ -190,12 +264,26 @@ function findNextEvent(
 
   for (const frame of goalFrames) {
     const hit = sweepCapsule(position, velocity, radiusM, frame, duration);
-    if (hit !== undefined) consider({ kind: "ballContact", ...hit });
+    if (hit && (hit.time > CONTACT_TIME_TOLERANCE || !ballContacts.has(frame))) {
+      consider({ kind: "ballContact", ...hit, collider: frame });
+    }
   }
   for (const player of state.players) {
     const relativeVelocity = subtract(velocity, onGround(player.velocity));
     const hit = sweepCapsule(position, relativeVelocity, radiusM, playerCapsule(player), duration);
-    if (hit !== undefined) consider({ kind: "ballContact", ...hit, player });
+    // A ball pinched against the ground can overlap several bodies at the same instant.
+    // Apply each collider's impulse once until the bodies have advanced in time.
+    if (hit && (hit.time > CONTACT_TIME_TOLERANCE || !ballContacts.has(player))) {
+      consider({ kind: "ballContact", ...hit, collider: player, player });
+    }
+    const pending = play.slots.get(player.playerId);
+    if (pending?.phase === "active" && isDefenseRequest(pending.request)) {
+      const contact = defenseCandidate(state, player, pending.request, duration);
+      if (contact) consider({ time: contact.time, kind: "defense", player, pending, request: pending.request });
+    } else if (firstTouchAvailable && pending?.phase !== "windup") {
+      const contact = firstTouchCandidate(state, player, play.actions.get(player.playerId), duration);
+      if (contact) consider({ time: contact.time, kind: "firstTouch", player });
+    }
   }
 
   for (const axis of ["x", "y"] as const) {
@@ -204,6 +292,10 @@ function findNextEvent(
     const plane = side * ((axis === "x" ? lengthM : widthM) / 2 + radiusM);
     const time = Math.max(0, (plane - position[axis]) / velocity[axis]);
     consider({ kind: "crossing", time, axis, side, plane });
+  }
+  if (first && tied.length > 0) {
+    const candidates = [first, ...tied];
+    return candidates[Math.floor(randomUnit(state) * candidates.length)];
   }
   return first;
 }
@@ -230,7 +322,15 @@ function classifyCrossing(state: EngineState, axis: Axis, side: Side): BallCross
   return { kind: axis === "x" && fitsOpening ? "goal" : "exit", axis, side, position: { ...state.ball.position } };
 }
 
-function resolveContact(state: EngineState, event: Exclude<PhysicsEvent, { kind: "crossing" }>): void {
+function recordControlLoss(state: EngineState, events: EventData[], playerId: PlayerId): void {
+  events.push({ kind: "possessionLost", playerId, position: { ...state.ball.position } });
+}
+
+function resolveContact(
+  state: EngineState,
+  event: Exclude<PhysicsEvent, { kind: "crossing" | "firstTouch" | "defense" | "launch" }>,
+  events: EventData[],
+): void {
   switch (event.kind) {
     case "wall":
       event.player.position[event.axis] = event.plane;
@@ -253,8 +353,15 @@ function resolveContact(state: EngineState, event: Exclude<PhysicsEvent, { kind:
       limitBallSpeed(state.ball.velocity, state.config.ball.maxSpeedMps);
       if (event.player !== undefined) {
         state.ball.lastTouchPlayerId = event.player.playerId;
+        events.push({
+          kind: "ballTouch", playerId: event.player.playerId, outcome: "deflected",
+          position: { ...state.ball.position }, flightAction: state.ball.flightAction,
+        });
+        delete state.ball.flightAction;
         if (state.ball.control.kind === "dribble" && state.ball.control.playerId !== event.player.playerId) {
+          recordControlLoss(state, events, state.ball.control.playerId);
           state.ball.control = { kind: "free" };
+          state.nextDribbleTouchTick = 0;
         }
       }
       break;
@@ -309,10 +416,8 @@ function updatePlayerState(
   const holder = state.players.find((player) => player.playerId === holderId)!;
   const radius = state.config.ball.radiusM;
   if (state.ball.control.kind === "keeperHeld") {
-    state.ball.position = keeperHoldPosition(holder, radius);
+    state.ball.position = keeperHoldPosition(holder, radius, state.config.pitch);
     state.ball.velocity = onGround(holder.velocity);
-  } else if (!inDribbleReach(holder, state.ball.position, radius)) {
-    state.ball.control = { kind: "free" };
   }
 }
 

@@ -164,6 +164,7 @@ export interface BallState {
   velocity: Vec3;
   lastTouchPlayerId: PlayerId | null;
   control: BallControl;
+  flightAction?: ActionKey;
 }
 
 export type ActionRequest =
@@ -203,11 +204,34 @@ export interface EngineDiagnostic {
   action: ActionKey;
 }
 
+export interface PlayerActionState {
+  key: ActionKey;
+  kind: ActionRequest["kind"];
+  phase: "windup" | "active" | "recovery";
+  contactTick: number;
+  activeUntilTick?: number;
+  readyTick: number;
+}
+
 export type MatchEvent = { tick: number; ordinal: number } & (
   | { kind: "goal"; teamId: TeamId; position: Vec3; lastTouchPlayerId: PlayerId | null }
   | { kind: "ballExit"; restart: Exclude<RestartKind, "kickoff">; teamId: TeamId; position: Vec3 }
   | { kind: "phaseChanged"; phase: MatchPhase }
-  | { kind: "actionContact"; action: ActionKey; outcome: "kicked" | "thrown" | "released"; position: Vec3 }
+  | {
+      kind: "actionContact";
+      action: ActionKey;
+      outcome: "kicked" | "thrown" | "released" | "wonBall" | "caught" | "parried" | "missed";
+      position: Vec3;
+      flightAction?: ActionKey;
+    }
+  | {
+      kind: "ballTouch";
+      playerId: PlayerId;
+      outcome: "received" | "miscontrolled" | "dribbled" | "deflected";
+      position: Vec3;
+      flightAction?: ActionKey;
+    }
+  | { kind: "possessionLost"; playerId: PlayerId; position: Vec3 }
 );
 
 export interface TickResult {
@@ -226,7 +250,7 @@ export interface RenderSnapshot {
   score: readonly [number, number];
   attackDirections: readonly [AttackDirection, AttackDirection];
   ball: BallState;
-  players: readonly PlayerState[];
+  players: readonly (PlayerState & { action?: PlayerActionState })[];
 }
 
 export interface TeamObservation extends RenderSnapshot {

@@ -17,6 +17,8 @@ export interface EngineState {
   events: MatchEvent[];
   rngState: number;
   keeperReleaseTick: number | null;
+  touchExclusion: { playerId: PlayerId; untilTick: number } | null;
+  nextDribbleTouchTick: number;
   requestIds: Map<PlayerId, number>;
   nextRuleRequestId: number;
 }
@@ -208,11 +210,15 @@ export function inKeeperArea(state: EngineState, player: PlayerState): boolean {
     Math.abs(player.position.y) <= pitch.keeperAreaWidthM / 2 + tolerance;
 }
 
-export function keeperHoldPosition(player: PlayerState, ballRadiusM: number): Vec3 {
+export function keeperHoldPosition(player: PlayerState, ballRadiusM: number, pitch: PitchConfig): Vec3 {
   const forward = player.definition.radiusM + ballRadiusM;
+  const limitX = Math.max(0, pitch.lengthM / 2 - ballRadiusM - pitch.postRadiusM);
+  const limitY = pitch.widthM / 2 - ballRadiusM;
+  const x = player.position.x + Math.cos(player.facingRad) * forward;
+  const y = player.position.y + Math.sin(player.facingRad) * forward;
   return {
-    x: player.position.x + Math.cos(player.facingRad) * forward,
-    y: player.position.y + Math.sin(player.facingRad) * forward,
+    x: Math.max(-limitX, Math.min(limitX, x)),
+    y: Math.max(-limitY, Math.min(limitY, y)),
     z: Math.max(ballRadiusM, player.definition.bodyHeightM * 0.72),
   };
 }
@@ -318,7 +324,7 @@ function validateBall(state: EngineState, scenario: ScenarioDefinition): BallSta
     } else {
       check(owner.definition.role === "goalkeeper" && inKeeperArea(state, owner),
         "scenario", "ball.control", "keeper hold requires the goalkeeper in its handling area");
-      const hold = keeperHoldPosition(owner, config.radiusM);
+      const hold = keeperHoldPosition(owner, config.radiusM, pitch);
       check(Math.hypot(ball.position.x - hold.x, ball.position.y - hold.y, ball.position.z - hold.z) <= tolerance,
         "scenario", "ball.position", "ball must be at the goalkeeper's hold point");
       check(Math.hypot(ball.velocity.x - owner.velocity.x, ball.velocity.y - owner.velocity.y, ball.velocity.z) <= tolerance,
@@ -478,6 +484,8 @@ export function placeRestart(state: EngineState, teamId: TeamId, restart: Restar
     control: { kind: "free" },
   };
   state.keeperReleaseTick = null;
+  state.touchExclusion = null;
+  state.nextDribbleTouchTick = 0;
 
   const readyTick = state.tick + state.config.rules.restartPlacementTicks;
   const placement = {
@@ -545,6 +553,8 @@ export function buildResetState(config: MatchConfig, seed: number, scenario?: Sc
     events: [],
     rngState: seed,
     keeperReleaseTick: null,
+    touchExclusion: null,
+    nextDribbleTouchTick: 0,
     requestIds: new Map(),
     nextRuleRequestId: 1,
   };

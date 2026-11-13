@@ -2,8 +2,11 @@ import type {
   ActionFrame, ActionKey, ActionRequest, ActionResult, EngineDiagnostic, MatchEvent,
   PlayerAction, PlayerId, PlayerState, Vec2,
 } from "../contracts/index.js";
+import { executionFactors, footQuality } from "./abilities.js";
+import { defenseTiming, isDefenseRequest } from "./defense.js";
 import { playerCapsule, sweepCapsule } from "./physics-geometry.js";
 import { randomUnit } from "./random.js";
+import { inKeeperArea } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
 export type EventData<T = MatchEvent> = T extends MatchEvent ? Omit<T, "tick" | "ordinal"> : never;
@@ -11,16 +14,18 @@ export type EventData<T = MatchEvent> = T extends MatchEvent ? Omit<T, "tick" | 
 type LaunchRequest = Extract<ActionRequest, { kind: "kick" | "throwIn" | "keeperRelease" }>;
 type Setup = Extract<EngineState["phase"], { kind: "kickoffSetup" | "restartSetup" }>;
 
-interface PendingLaunch {
+export interface PendingAction {
   action: ActionKey;
-  request: LaunchRequest;
+  request: ActionRequest;
   contactTick: number;
   readyTick: number;
-  phase: "windup" | "recovery";
+  activeUntilTick: number;
+  recoveryTicks: number;
+  phase: "windup" | "active" | "recovery";
   interrupted?: boolean;
 }
 
-export type Launches = Map<PlayerId, PendingLaunch>;
+export type ActionSlots = Map<PlayerId, PendingAction>;
 
 const techniques = {
   pass: { speed: 0.55, minElevation: 0, maxElevation: 5, windup: 6, recovery: 8 },
@@ -111,7 +116,6 @@ function pointsInfield(state: EngineState, spot: Vec2, direction: Vec2): boolean
 
 function rejection(state: EngineState, player: PlayerState, request: ActionRequest): string | undefined {
   const phase = state.phase;
-  if (request.kind === "tackle" || request.kind === "keeperSave") return "unsupportedAction";
   if (isSetup(phase)) {
     if (phase.takerId !== player.playerId || state.tick < phase.readyTick ||
         state.tick >= phase.deadlineTick) return "illegalPhase";
@@ -127,27 +131,40 @@ function rejection(state: EngineState, player: PlayerState, request: ActionReque
     return state.ball.control.kind === "keeperHeld" && state.ball.control.playerId === player.playerId
       ? undefined : "ballUnavailable";
   }
+  if (isDefenseRequest(request)) {
+    if (request.kind === "keeperSave" &&
+        (player.definition.role !== "goalkeeper" || !inKeeperArea(state, player))) return "illegalRole";
+    const control = state.ball.control;
+    if (control.kind === "keeperHeld" || (request.kind === "tackle" &&
+        control.kind === "dribble" && control.playerId === player.playerId)) return "ballUnavailable";
+    return undefined;
+  }
   return mayKick(state, player) ? undefined : "ballUnavailable";
 }
 
-function actionTiming(request: LaunchRequest): { windup: number; recovery: number } {
-  if (request.kind === "throwIn") return { windup: 12, recovery: 12 };
-  if (request.kind === "keeperRelease") return { windup: 6, recovery: 8 };
+function actionTiming(
+  player: PlayerState, request: ActionRequest,
+): { windup: number; active: number; recovery: number } {
+  if (isDefenseRequest(request)) return defenseTiming(player, request);
+  if (request.kind === "throwIn") return { windup: 12, active: 0, recovery: 12 };
+  if (request.kind === "keeperRelease") return { windup: 6, active: 0, recovery: 8 };
   const technique = techniques[request.kickType];
   return {
     windup: technique.windup + (request.kickType === "shot" ? Math.round(10 * request.power) : 0),
+    active: 0,
     recovery: technique.recovery,
   };
 }
 
 function accept(
-  state: EngineState, launches: Launches, action: ActionKey, request: LaunchRequest,
+  state: EngineState, slots: ActionSlots, player: PlayerState, action: ActionKey, request: ActionRequest,
   results: ActionResult[],
 ): void {
-  const { windup, recovery } = actionTiming(request);
+  const { windup, active, recovery } = actionTiming(player, request);
   const contactTick = state.tick + windup;
-  launches.set(action.playerId, {
-    action, request, contactTick, readyTick: contactTick + recovery, phase: "windup",
+  slots.set(action.playerId, {
+    action, request, contactTick, activeUntilTick: contactTick + active,
+    readyTick: contactTick + active + recovery, recoveryTicks: recovery, phase: "windup",
   });
   results.push({ action, tick: state.tick + 1, status: "accepted" });
 }
@@ -174,13 +191,13 @@ function automaticDirection(state: EngineState, player: PlayerState): Vec2 {
   return unit(direction);
 }
 
-function acceptAutomatic(state: EngineState, launches: Launches, results: ActionResult[]): void {
+function acceptAutomatic(state: EngineState, slots: ActionSlots, results: ActionResult[]): void {
   const phase = state.phase;
   const setup = isSetup(phase) && state.tick >= phase.deadlineTick ? phase : undefined;
   const held = phase.kind === "live" && state.ball.control.kind === "keeperHeld" &&
     state.keeperReleaseTick !== null && state.tick >= state.keeperReleaseTick ? state.ball.control : undefined;
   const playerId = setup?.takerId ?? held?.playerId;
-  if (playerId === undefined || launches.has(playerId)) return;
+  if (playerId === undefined || slots.has(playerId)) return;
 
   const player = state.players.find((entry) => entry.playerId === playerId)!;
   const id = ++state.nextRuleRequestId;
@@ -191,11 +208,12 @@ function acceptAutomatic(state: EngineState, launches: Launches, results: Action
   else if (setup?.kind === "restartSetup" && setup.restart === "throwIn") {
     request = { ...shared, kind: "throwIn" };
   } else request = { ...shared, kind: "kick", kickType: "pass", loft: 0 };
-  accept(state, launches, { source: "rule", playerId, requestId: id }, request, results);
+  accept(state, slots, player, { source: "rule", playerId, requestId: id }, request, results);
 }
 
-function launch(state: EngineState, player: PlayerState, pending: PendingLaunch, events: EventData[]): void {
-  const { request, action } = pending;
+function launch(
+  state: EngineState, player: PlayerState, action: ActionKey, request: LaunchRequest, events: EventData[],
+): void {
   const { physical, technical } = player.definition.abilities;
   const technique = request.kind === "kick" ? techniques[request.kickType] : undefined;
   const maxSpeed = request.kind === "kick" ? physical.maxKickSpeedMps * technique!.speed :
@@ -203,7 +221,10 @@ function launch(state: EngineState, player: PlayerState, pending: PendingLaunch,
     request.technique === "roll" ? physical.maxKeeperRollSpeedMps : physical.maxKeeperThrowSpeedMps;
   const skill = request.kind === "keeperRelease" ? technical.goalkeeping :
     request.kind === "kick" && request.kickType === "shot" ? technical.shooting : technical.passing;
-  const spread = (0.015 + 0.22 * (1 - skill)) * (0.55 + 0.45 * request.power);
+  const factors = executionFactors(state, player);
+  const foot = request.kind === "kick" && !isSetup(state.phase) ? footQuality(player, state.ball.position) : 1;
+  const quality = factors.fatigue * factors.balance * factors.movement * factors.pressure * foot;
+  const spread = (0.015 + 0.22 * (1 - skill * quality)) * (0.55 + 0.45 * request.power);
   const angle = Math.atan2(request.direction.y, request.direction.x) + (2 * randomUnit(state) - 1) * spread;
   let direction = { x: Math.cos(angle), y: Math.sin(angle) };
   const setup = isSetup(state.phase);
@@ -213,8 +234,9 @@ function launch(state: EngineState, player: PlayerState, pending: PendingLaunch,
     ? technique!.minElevation + request.loft * (technique!.maxElevation - technique!.minElevation)
     : request.kind === "throwIn" ? 28 : request.technique === "roll" ? 0 : 22;
   const elevation = elevationDegrees * Math.PI / 180;
-  const exertion = (0.65 + 0.35 * player.stamina) * (0.7 + 0.3 * player.balance);
-  const speed = Math.min(state.config.ball.maxSpeedMps, maxSpeed * request.power * exertion);
+  const powerError = (2 * randomUnit(state) - 1) * (1 - skill * quality) * (0.02 + 0.14 * request.power);
+  const speed = Math.min(state.config.ball.maxSpeedMps,
+    maxSpeed * clampUnit(request.power * (1 + powerError)) * factors.exertion);
   const radius = state.config.ball.radiusM;
 
   if (request.kind === "throwIn") {
@@ -243,6 +265,9 @@ function launch(state: EngineState, player: PlayerState, pending: PendingLaunch,
   state.ball.control = { kind: "free" };
   state.ball.lastTouchPlayerId = player.playerId;
   state.keeperReleaseTick = null;
+  state.ball.flightAction = action;
+  state.touchExclusion = { playerId: player.playerId, untilTick: state.tick + 8 };
+  state.nextDribbleTouchTick = 0;
   events.push({
     kind: "actionContact", action,
     outcome: request.kind === "kick" ? "kicked" : request.kind === "throwIn" ? "thrown" : "released",
@@ -250,15 +275,73 @@ function launch(state: EngineState, player: PlayerState, pending: PendingLaunch,
   });
 }
 
+function enterRecovery(
+  state: EngineState, slots: ActionSlots, pending: PendingAction, interrupted = false,
+): void {
+  slots.set(pending.action.playerId, {
+    ...pending, phase: "recovery", readyTick: state.tick + pending.recoveryTicks, interrupted,
+  });
+}
+
+export function interruptAction(
+  state: EngineState, slots: ActionSlots, playerId: PlayerId, results: ActionResult[], reason: string,
+): void {
+  const pending = slots.get(playerId);
+  if (!pending || pending.phase === "recovery") return;
+  enterRecovery(state, slots, pending, true);
+  results.push({ action: pending.action, tick: state.tick + 1, status: "interrupted", reason });
+}
+
+export function finishDefenseContact(
+  state: EngineState, slots: ActionSlots, pending: PendingAction, events: EventData[],
+  outcome: "wonBall" | "caught" | "parried", position: EngineState["ball"]["position"], flightAction?: ActionKey,
+): void {
+  events.push({ kind: "actionContact", action: pending.action, outcome, position, flightAction });
+  enterRecovery(state, slots, pending);
+  // A short scenario deadline can end save recovery early so the rule can release on time.
+  if (outcome === "caught" && state.keeperReleaseTick !== null) {
+    const recovery = slots.get(pending.action.playerId)!;
+    slots.set(pending.action.playerId, { ...recovery, readyTick: Math.min(recovery.readyTick, state.keeperReleaseTick) });
+  }
+}
+
+export function dueLaunch(state: EngineState, pending: PendingAction | undefined): boolean {
+  return pending?.phase === "windup" && !isDefenseRequest(pending.request) &&
+    pending.contactTick <= state.tick;
+}
+
+export function resolveLaunch(
+  state: EngineState, slots: ActionSlots, player: PlayerState, events: EventData[], results: ActionResult[],
+): void {
+  const pending = slots.get(player.playerId);
+  if (pending?.phase !== "windup" || isDefenseRequest(pending.request)) return;
+  const { request } = pending;
+  const legal = isSetup(state.phase) ||
+    (request.kind === "kick" && mayKick(state, player)) ||
+    (request.kind === "keeperRelease" && state.ball.control.kind === "keeperHeld" &&
+      state.ball.control.playerId === player.playerId);
+  if (!legal) {
+    interruptAction(state, slots, player.playerId, results, "ballUnavailable");
+    return;
+  }
+  launch(state, player, pending.action, request, events);
+  enterRecovery(state, slots, pending);
+}
+
 export function processActions(
-  state: EngineState, launches: Launches, actions: Map<PlayerId, PlayerAction>,
+  state: EngineState, slots: ActionSlots, actions: Map<PlayerId, PlayerAction>,
   events: EventData[], results: ActionResult[], diagnostics: EngineDiagnostic[],
 ): void {
   for (const player of state.players) {
     const playerId = player.playerId;
-    const pending = launches.get(playerId);
-    if (pending?.phase === "recovery" && state.tick >= pending.readyTick) {
-      launches.delete(playerId);
+    const pending = slots.get(playerId);
+    if (pending?.phase === "active" && state.tick >= pending.activeUntilTick) {
+      events.push({
+        kind: "actionContact", action: pending.action, outcome: "missed", position: { ...state.ball.position },
+      });
+      enterRecovery(state, slots, pending);
+    } else if (pending?.phase === "recovery" && state.tick >= pending.readyTick) {
+      slots.delete(playerId);
       if (!pending.interrupted) {
         results.push({ action: pending.action, tick: state.tick + 1, status: "completed" });
       }
@@ -271,45 +354,38 @@ export function processActions(
       continue;
     }
     state.requestIds.set(playerId, request.id);
-    const reason = launches.has(playerId) ? "busy" : rejection(state, player, request);
+    const reason = slots.has(playerId) ? "busy" : rejection(state, player, request);
     if (reason) {
       results.push({ action, tick: state.tick + 1, status: "rejected", reason });
-    } else if (request.kind !== "tackle" && request.kind !== "keeperSave") {
-      accept(state, launches, action, request, results);
+    } else {
+      accept(state, slots, player, action, request, results);
     }
   }
-  acceptAutomatic(state, launches, results);
+  acceptAutomatic(state, slots, results);
 
   for (const player of state.players) {
-    const pending = launches.get(player.playerId);
+    const pending = slots.get(player.playerId);
     if (!pending || pending.phase !== "windup") continue;
     const request = pending.request;
-    const legal = isSetup(state.phase) ||
-      (request.kind === "kick" && mayKick(state, player)) ||
-      (request.kind === "keeperRelease" && state.ball.control.kind === "keeperHeld" &&
-        state.ball.control.playerId === player.playerId);
-    if (!legal) {
-      launches.set(player.playerId, {
-        ...pending,
-        phase: "recovery",
-        readyTick: state.tick + actionTiming(request).recovery,
-        interrupted: true,
-      });
-      results.push({ action: pending.action, tick: state.tick + 1, status: "interrupted", reason: "ballUnavailable" });
-    } else if (state.tick >= pending.contactTick) {
-      launch(state, player, pending, events);
-      launches.set(player.playerId, { ...pending, phase: "recovery" });
+    if (isDefenseRequest(request)) {
+      if (state.tick >= pending.contactTick) {
+        slots.set(player.playerId, { ...pending, phase: "active" });
+      }
+    } else if (request.kind === "kick" && state.phase.kind === "live" && !mayKick(state, player)) {
+      interruptAction(state, slots, player.playerId, results, "ballUnavailable");
+    } else if (isSetup(state.phase) && dueLaunch(state, pending)) {
+      resolveLaunch(state, slots, player, events, results);
     }
   }
 }
 
 export function restrictMovement(
-  launches: Launches, actions: Map<PlayerId, PlayerAction>,
+  slots: ActionSlots, actions: Map<PlayerId, PlayerAction>,
 ): void {
-  for (const [id, pending] of launches) {
+  for (const [id, pending] of slots) {
     const action = actions.get(id);
     if (!action) continue;
-    const scale = pending.phase === "windup" ? 0.4 : 0.65;
+    const scale = pending.phase === "recovery" ? 0.65 : 0.4;
     actions.set(id, {
       ...action, sprint: false,
       movement: { x: action.movement.x * scale, y: action.movement.y * scale },
@@ -317,13 +393,13 @@ export function restrictMovement(
   }
 }
 
-export function interruptLaunches(
-  launches: Launches, tick: number, results: ActionResult[],
+export function interruptActions(
+  slots: ActionSlots, tick: number, results: ActionResult[],
 ): void {
-  for (const pending of launches.values()) {
+  for (const pending of slots.values()) {
     if (!pending.interrupted) {
       results.push({ action: pending.action, tick, status: "interrupted", reason: "phaseChanged" });
     }
   }
-  launches.clear();
+  slots.clear();
 }
