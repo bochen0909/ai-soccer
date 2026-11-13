@@ -5,7 +5,8 @@
 //   3 STEP  body int32[envs * agents * 3] -> 131 binary step payload
 //   4 CLOSE
 // Step payload, each section padded to 4 bytes: obs f32[E*A*D], mask u8[E*A*ACT], agentMask u8[E*A],
-// reward f32[E], done u8[E], score i32[E*2] (own, opponent; valid when done), steps i32[E] (length of the ended episode).
+// reward f32[E], done u8[E], score i32[E*2] (own, opponent; valid when done), steps i32[E] (length of the ended episode,
+// or -1 when the engine failed and the episode was dropped).
 // An environment that ends is reset at once, so the returned observation starts the next episode.
 import {
   createArcadeConfig, createElevenAsideConfig, profileTeamOptions, SoccerTrainingEnv,
@@ -81,7 +82,7 @@ function payload(results, ended) {
     done[index] = end.done ? 1 : 0;
     score[index * 2] = end.score[0];
     score[index * 2 + 1] = end.score[1];
-    steps[index] = end.steps;
+    steps[index] = end.failed ? -1 : end.steps;
   });
   return Buffer.from(buffer);
 }
@@ -100,7 +101,17 @@ function step(actions) {
   const per = layout.agents * 3;
   const ended = [];
   const results = slots.map((slot, index) => {
-    const result = slot.current.step(actions.subarray(index * per, (index + 1) * per));
+    let result;
+    try {
+      result = slot.current.step(actions.subarray(index * per, (index + 1) * per));
+    } catch (error) {
+      // An engine failure must not end a long training run. Drop the episode and start the next one.
+      process.stderr.write(`env-server: episode ${slot.episode} in slot ${index} failed at tick ` +
+        `${slot.current.observation().tick} and was dropped: ${error instanceof Error ? error.message : error}\n`);
+      ended.push({ reward: 0, done: true, score: [0, 0], steps: slot.steps, failed: true });
+      begin(slot);
+      return slot.last;
+    }
     slot.steps += 1;
     const done = result.terminated || result.truncated;
     ended.push({ reward: result.reward, done, score: result.info.score, steps: slot.steps });

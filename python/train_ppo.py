@@ -74,7 +74,7 @@ def evaluate_policy(policy, env, device, episodes_per_env):
     while counts.min() < episodes_per_env:
         actions, _, _ = act(policy, batch, device)
         batch = env.step(actions.cpu().numpy())
-        for i in np.flatnonzero(batch.done):
+        for i in np.flatnonzero(batch.done & (batch.steps >= 0)):
             if counts[i] < episodes_per_env:
                 diffs.append(int(batch.score[i, 0] - batch.score[i, 1]))
             counts[i] += 1
@@ -140,7 +140,8 @@ def main():
                 store["val"].append(value.numpy()); store["agent"].append(batch.agent_mask)
                 batch = env.step(actions.numpy())
                 store["rew"].append(batch.reward); store["done"].append(batch.done)
-                finished_diffs.extend((batch.score[batch.done, 0] - batch.score[batch.done, 1]).tolist())
+                ok = batch.done & (batch.steps >= 0)
+                finished_diffs.extend((batch.score[ok, 0] - batch.score[ok, 1]).tolist())
             total_steps += T * E
 
             with torch.no_grad():

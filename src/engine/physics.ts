@@ -22,6 +22,9 @@ import type { EngineState } from "./reset.js";
 export const PHYSICS_TICK_SECONDS = 1 / 60;
 const SUBSTEPS = 4;
 const MAX_EVENTS_PER_SUBSTEP = 128;
+const WALL_PIN_TOLERANCE = 1e-6;
+const WALL_PUSH_MINIMUM = 0.05;
+const CONTACT_GROUP_MARGIN_M = 0.01;
 const VELOCITY_TOLERANCE = 1e-8;
 const MINIMUM_BOUNCE_SPEED = 0.3;
 
@@ -109,8 +112,9 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
       }
       if (++eventCount > MAX_EVENTS_PER_SUBSTEP) {
         if (settled || jammed.size === 0) throw new PhysicsError(state.tick);
-        // Treat the pile-up as perfectly inelastic: everyone involved stops.
-        for (const { velocity } of jammed) {
+        // Treat the pile-up as perfectly inelastic: everyone touching it stops, not only the players that
+        // happened to trade impulses lately, or the rest of a long row would restart the chain.
+        for (const { velocity } of contactGroup(state, jammed)) {
           velocity.x = 0;
           velocity.y = 0;
         }
@@ -362,7 +366,7 @@ function resolveContact(
       break;
     }
     case "playerContact":
-      resolvePlayerContact(event.first, event.second);
+      resolvePlayerContact(state, event.first, event.second);
       break;
     case "ballContact": {
       const colliderVelocity = onGround(event.player?.velocity ?? { x: 0, y: 0 });
@@ -388,13 +392,47 @@ function resolveContact(
   }
 }
 
-function resolvePlayerContact(first: PlayerState, second: PlayerState): void {
+/** The seed players plus everyone connected to them through touching or overlapping bodies. */
+function contactGroup(state: EngineState, seeds: ReadonlySet<PlayerState>): Set<PlayerState> {
+  const group = new Set(seeds);
+  const queue = [...seeds];
+  for (let current = queue.pop(); current !== undefined; current = queue.pop()) {
+    for (const other of state.players) {
+      if (group.has(other)) continue;
+      const reach = current.definition.radiusM + other.definition.radiusM + CONTACT_GROUP_MARGIN_M;
+      if (Math.hypot(current.position.x - other.position.x, current.position.y - other.position.y) <= reach) {
+        group.add(other);
+        queue.push(other);
+      }
+    }
+  }
+  return group;
+}
+
+/** Whether a push along `push` drives the player into a movement limit they already stand on. */
+function pinnedAgainstWall(state: EngineState, player: PlayerState, push: Vec3): boolean {
+  const { min, max } = movementBounds(state, player);
+  const { x, y } = player.position;
+  // Contacts along a wall carry a tiny normal component across it from rounding. That is not a push into the wall.
+  return (push.x > WALL_PUSH_MINIMUM && x >= max.x - WALL_PIN_TOLERANCE) ||
+    (push.x < -WALL_PUSH_MINIMUM && x <= min.x + WALL_PIN_TOLERANCE) ||
+    (push.y > WALL_PUSH_MINIMUM && y >= max.y - WALL_PIN_TOLERANCE) ||
+    (push.y < -WALL_PUSH_MINIMUM && y <= min.y + WALL_PIN_TOLERANCE);
+}
+
+function resolvePlayerContact(state: EngineState, first: PlayerState, second: PlayerState): void {
   const separation = subtract(onGround(first.position), onGround(second.position));
   const distance = Math.hypot(separation.x, separation.y);
   const normal = { x: separation.x / distance, y: separation.y / distance, z: 0 };
   const relativeVelocity = subtract(onGround(first.velocity), onGround(second.velocity));
-  const firstInverseMass = 1 / first.definition.massKg;
-  const secondInverseMass = 1 / second.definition.massKg;
+  // A player pinned against a wall cannot move away from it, so the wall takes their share of the impulse.
+  // Without this, a pile of players against a wall passes ever smaller impulses back and forth without end.
+  // If both are pinned (diagonal contact between players on different walls), the walls cannot absorb it all.
+  const firstPinned = pinnedAgainstWall(state, first, normal);
+  const secondPinned = pinnedAgainstWall(state, second, { x: -normal.x, y: -normal.y, z: 0 });
+  const pins = !(firstPinned && secondPinned);
+  const firstInverseMass = pins && firstPinned ? 0 : 1 / first.definition.massKg;
+  const secondInverseMass = pins && secondPinned ? 0 : 1 / second.definition.massKg;
   const impulse = -dot(relativeVelocity, normal) / (firstInverseMass + secondInverseMass);
   first.velocity.x += normal.x * impulse * firstInverseMass;
   first.velocity.y += normal.y * impulse * firstInverseMass;

@@ -19,7 +19,7 @@ class Batch:
     reward: np.ndarray      # [envs] float32, team reward of the step
     done: np.ndarray        # [envs] bool, the episode ended (obs already belong to the next one)
     score: np.ndarray       # [envs, 2] int32, (own, opponent) goals of the ended episode
-    steps: np.ndarray       # [envs] int32, length of the ended episode
+    steps: np.ndarray       # [envs] int32, length of the ended episode, or -1 if the engine failed and it was dropped
 
 
 class _Server:

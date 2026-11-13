@@ -193,3 +193,23 @@ test('eleven-a-side matches work with a padded policy interface', () => {
   assert.equal(result.agentMask.reduce((sum, value) => sum + value, 0), 11);
   env.step(idle(env));
 });
+
+test('players that all run into a wall or corner pile up without crashing the physics', () => {
+  // Each case drove the whole team the same way and used to hit the physics event limit:
+  // contacts between players pinned against a wall passed ever smaller impulses back and forth.
+  for (const [move, side, seed] of [[6, 'away', 6], [4, 'home', 4], [4, 'away', 4]]) {
+    const config = shortConfig();
+    config.periodTicks = [1800, 1800];
+    const env = new SoccerTrainingEnv({ config, learnerTeamId: side, maxSteps: 220 });
+    let result = env.reset(seed);
+    while (!result.terminated && !result.truncated) {
+      const actions = new Array(env.agentCount * ACTION_FIELDS).fill(0);
+      for (let agent = 0; agent < env.agentCount; agent += 1) {
+        actions[agent * ACTION_FIELDS] = move;
+        actions[agent * ACTION_FIELDS + 1] = 1;
+      }
+      result = env.step(actions);
+    }
+    assert.ok(result.info.tick > 1000, `move ${move} as ${side} stopped at tick ${result.info.tick}`);
+  }
+});
