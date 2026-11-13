@@ -71,6 +71,7 @@ export function createArcadeConfig(): MatchConfig {
       halftimeTicks: 180,
       keeperHoldTicks: 360,
       restartExclusionM: 3,
+      randomKickoff: true,
     },
     tuning: { version: 2 },
   };

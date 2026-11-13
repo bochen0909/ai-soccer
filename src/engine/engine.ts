@@ -8,6 +8,7 @@ import {
 import type { EventData, ActionSlots } from "./actions.js";
 import { advancePhysics } from "./physics.js";
 import type { PhysicsOutcome } from "./physics.js";
+import { kickoffTeamId } from "./random.js";
 import { buildResetState, placeRestart } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
@@ -39,7 +40,10 @@ function recordCrossing(
     state.score[scorer] += 1;
     events.push({ kind: "goal", teamId: teams[scorer].id, position, lastTouchPlayerId: ball.lastTouchPlayerId });
     return () => {
-      state.phase = { kind: "goalPause", teamId: teams[1 - scorer].id, untilTick: state.tick + config.rules.goalPauseTicks };
+      state.phase = {
+        kind: "goalPause", teamId: kickoffTeamId(state, teams[1 - scorer].id),
+        untilTick: state.tick + config.rules.goalPauseTicks,
+      };
     };
   }
 
@@ -81,7 +85,7 @@ function advancePause(state: EngineState, startingPhase: MatchPhase): void {
     state.attackDirections = [-1, 1];
     state.remainingPeriodTicks = state.config.periodTicks[1];
     const secondKickoff = state.config.teams.find((team) => team.id !== state.config.firstKickoffTeamId)!;
-    placeRestart(state, secondKickoff.id, "kickoff", center);
+    placeRestart(state, kickoffTeamId(state, secondKickoff.id), "kickoff", center);
   }
 }
 

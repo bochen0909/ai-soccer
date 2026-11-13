@@ -3,6 +3,7 @@ import type {
   PlayerId, PlayerState, RestartKind, ScenarioDefinition, TeamId, Vec2, Vec3,
 } from "../contracts/index.js";
 import { capsuleDistanceSquared, goalFrameCapsules, playerCapsule } from "./physics-geometry.js";
+import { kickoffTeamId } from "./random.js";
 
 export interface EngineState {
   config: MatchConfig;
@@ -565,7 +566,7 @@ export function buildResetState(config: MatchConfig, seed: number, scenario?: Sc
     placeRestart(kickoffCheck, team.id, "kickoff", { x: 0, y: 0 });
   }
   if (scenario === undefined) {
-    placeRestart(state, configCopy.firstKickoffTeamId, "kickoff", { x: 0, y: 0 });
+    placeRestart(state, kickoffTeamId(state, configCopy.firstKickoffTeamId), "kickoff", { x: 0, y: 0 });
     return state;
   }
 

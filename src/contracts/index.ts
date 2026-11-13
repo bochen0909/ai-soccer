@@ -79,6 +79,12 @@ export interface BallConfig {
 export interface MatchRules {
   version: 1;
   directionalKickoff?: boolean;
+  /**
+   * Every kickoff (the opening one, after each goal, and the second half) goes to either team with equal chance,
+   * drawn from the match seed. Without it, the first kickoff goes to firstKickoffTeamId, the team that conceded
+   * takes the one after a goal, and the other team starts the second half.
+   */
+  randomKickoff?: boolean;
   restartPlacementTicks: number;
   restartInputTicks: number;
   goalPauseTicks: number;

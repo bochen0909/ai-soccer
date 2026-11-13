@@ -4,6 +4,7 @@ import { createArcadeConfig, SoccerEngine } from '../dist/index.js';
 
 function createTestConfig() {
   const config = createArcadeConfig();
+  config.rules.randomKickoff = false; // most tests rely on the home team kicking off first
   config.ball.maxSpeedMps = 120;
   config.rules.restartPlacementTicks = 2;
   config.rules.restartInputTicks = 3;
@@ -440,4 +441,65 @@ test('a keeper-held scenario automatically releases the ball on its deadline', (
   assert.deepEqual(engine.snapshot().ball.control, { kind: 'free' });
   assert.equal(engine.snapshot().ball.lastTouchPlayerId, keeper.id);
   assert.equal(engine.snapshot().remainingPeriodTicks, config.periodTicks[0] - engine.snapshot().tick);
+});
+
+function kickoffAfterGoal(config, seed) {
+  const scenario = liveScenario(config);
+  const goalLine = config.pitch.lengthM / 2;
+  const radius = config.ball.radiusM;
+  scenario.ball.position = { x: goalLine - 1.2 * radius, y: 0, z: config.pitch.goalHeightM / 2 };
+  scenario.ball.velocity = { x: 1.5 * radius * 60, y: 0, z: 0 };
+  const engine = new SoccerEngine();
+  engine.reset(config, seed, scenario);
+  step(engine);
+  step(engine);
+  assert.equal(engine.snapshot().phase.kind, 'goalPause');
+  return engine.snapshot().phase.teamId;
+}
+
+test('without random kickoffs the opening kickoff goes to the first team and the team that conceded restarts', () => {
+  const config = createTestConfig();
+  for (let seed = 1; seed <= 12; seed += 1) {
+    const engine = new SoccerEngine();
+    engine.reset(config, seed);
+    assert.equal(engine.snapshot().phase.teamId, 'home');
+    // Home scored, so away takes the kickoff.
+    assert.equal(kickoffAfterGoal(config, seed), 'away');
+  }
+});
+
+test('with random kickoffs both teams get the opening kickoff and the one after a goal', () => {
+  const config = createTestConfig();
+  config.rules.randomKickoff = true;
+  const opening = { home: 0, away: 0 };
+  const afterGoal = { home: 0, away: 0 };
+  for (let seed = 1; seed <= 60; seed += 1) {
+    const engine = new SoccerEngine();
+    engine.reset(config, seed);
+    opening[engine.snapshot().phase.teamId] += 1;
+    afterGoal[kickoffAfterGoal(config, seed)] += 1;
+  }
+  for (const counts of [opening, afterGoal]) {
+    assert.ok(counts.home >= 15 && counts.away >= 15, `kickoffs were not shared: ${JSON.stringify(counts)}`);
+  }
+});
+
+test('random kickoffs are chosen from the match seed, so a seed always gives the same kickoffs', () => {
+  const config = createTestConfig();
+  config.rules.randomKickoff = true;
+  config.periodTicks = [3, 3];
+  const play = (seed) => {
+    const engine = new SoccerEngine();
+    engine.reset(config, seed);
+    const kickoffs = [engine.snapshot().phase.teamId];
+    for (let tick = 0; tick < 40 && engine.snapshot().phase.kind !== 'fullTime'; tick += 1) {
+      step(engine);
+      const { phase } = engine.snapshot();
+      if (phase.kind === 'kickoffSetup' && kickoffs.length < 2 && engine.snapshot().period === 2) kickoffs.push(phase.teamId);
+    }
+    return [kickoffs, engine.hashState()];
+  };
+  assert.deepEqual(play(5), play(5));
+  const seconds = new Set([1, 2, 3, 4, 5, 6, 7, 8].map((seed) => play(seed)[0][1]));
+  assert.equal(seconds.size, 2, 'the second-half kickoff should vary with the seed');
 });

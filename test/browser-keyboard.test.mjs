@@ -5,6 +5,7 @@ import { KeyboardControls } from "../dist/runners/keyboard.js";
 
 function setup() {
   const config = createArcadeConfig();
+  config.rules.randomKickoff = false; // these tests are about the kickoff taker's controls, not who kicks off
   const session = new MatchSession();
   session.reset(config, 17, { human: { teamId: "home", playerId: "home-keeper" } });
   const snapshot = { ...session.snapshot(), phase: { kind: "live" } };
@@ -59,6 +60,7 @@ test("J plays kickoff back to a teammate and a held direction can aim forward", 
 test("the full match previews the kickoff receiver and hands over control on reception", () => {
   const { controls, press } = setup();
   const config = createElevenAsideConfig();
+  config.rules.randomKickoff = false;
   const session = new MatchSession();
   session.reset(config, 17, { human: { teamId: "home", playerId: "home-9" } });
   for (let tick = 0; tick < config.rules.restartPlacementTicks; tick += 1) session.step();

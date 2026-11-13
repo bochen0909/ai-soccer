@@ -6,3 +6,11 @@ export function randomUnit(state: { rngState: number }): number {
   mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
   return ((mixed ^ (mixed >>> 14)) >>> 0) / 0x100000000;
 }
+
+/** Who takes a kickoff: the usual team, or either team with equal chance when the match uses random kickoffs. */
+export function kickoffTeamId(
+  state: { rngState: number; config: { rules: { randomKickoff?: boolean }; teams: readonly { id: string }[] } },
+  usual: string,
+): string {
+  return state.config.rules.randomKickoff ? state.config.teams[randomUnit(state) < 0.5 ? 0 : 1].id : usual;
+}
