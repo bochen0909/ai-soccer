@@ -1,0 +1,174 @@
+import type { AttackDirection, PlayerId, TeamObservation, Vec2 } from "../contracts/index.js";
+import type { ActionIntent } from "../controllers/contracts.js";
+import {
+  ACT_NONE, ACT_SAVE, ACT_SHOOT_CENTER, ACT_SHOOT_LEFT, ACT_SHOOT_RIGHT, ACT_TACKLE, MOVE_COUNT,
+} from "./contracts.js";
+import type { ActionSpace } from "./contracts.js";
+import { clamp, lead, toWorld, unitDirection } from "./geometry.js";
+
+type PlayerState = TeamObservation["players"][number];
+
+export interface DecodedAction {
+  movement: Vec2;
+  sprint: boolean;
+  request?: ActionIntent;
+}
+
+export interface AgentContext {
+  observation: TeamObservation;
+  attack: AttackDirection;
+  /** Learner players in roster order. Pass slot k means team[k]. */
+  team: readonly PlayerState[];
+  /** Opposing players in their roster order. */
+  opponents: readonly PlayerState[];
+  ego: PlayerState;
+}
+
+const SHOT_POWER = 0.85;
+const SHOT_LOFT = 0.12;
+const LOFT_PASS = 0.55;
+const LOFT_ELEVATION_RAD = ((15 + 35 * LOFT_PASS) * Math.PI) / 180;
+
+/** Movement in the team's attack frame. Choice 0 stops. */
+export function decodeMove(choice: number, attack: AttackDirection): Vec2 {
+  if (choice === 0) return { x: 0, y: 0 };
+  const angle = ((choice - 1) * Math.PI) / 4;
+  return toWorld({ x: Math.cos(angle), y: Math.sin(angle) }, attack);
+}
+
+function passingPower(range: number, speedLimit: number): number {
+  return clamp(Math.sqrt(3.2 * range + 4) / speedLimit, 0.18, 0.88);
+}
+
+function loftPower(range: number, speedLimit: number, gravity: number): number {
+  const speed = Math.sqrt((range * gravity) / Math.sin(2 * LOFT_ELEVATION_RAD));
+  return clamp(speed / speedLimit, 0.25, 1);
+}
+
+function onPitch(observation: TeamObservation, point: Vec2, margin = 0.7): Vec2 {
+  const { lengthM, widthM } = observation.pitch;
+  return {
+    x: clamp(point.x, -(lengthM / 2 - margin), lengthM / 2 - margin),
+    y: clamp(point.y, -(widthM / 2 - margin), widthM / 2 - margin),
+  };
+}
+
+function passTarget(context: AgentContext, slot: number): Vec2 | undefined {
+  const receiver = context.team[slot];
+  if (!receiver || receiver.playerId === context.ego.playerId) return undefined;
+  return onPitch(context.observation, lead(receiver.position, receiver.velocity, 0.32));
+}
+
+function keeperHeldBy(observation: TeamObservation, playerId: PlayerId): boolean {
+  const { control } = observation.ball;
+  return control.kind === "keeperHeld" && control.playerId === playerId;
+}
+
+function inKeeperArea(context: AgentContext): boolean {
+  const { pitch } = context.observation;
+  const depth = (context.ego.position.x * context.attack) + pitch.lengthM / 2;
+  return depth >= -0.05 && depth <= pitch.keeperAreaDepthM + 0.05 &&
+    Math.abs(context.ego.position.y) <= pitch.keeperAreaWidthM / 2 + 0.05;
+}
+
+/** Writes 1 for every act the current state permits. "None" is always legal. */
+export function writeActionMask(context: AgentContext, space: ActionSpace, mask: Uint8Array, offset: number): void {
+  const { observation, ego } = context;
+  const { phase, ball } = observation;
+  const physical = ego.definition.abilities.physical;
+  mask.fill(0, offset, offset + space.actCount);
+  mask[offset + ACT_NONE] = 1;
+  if (ego.action) return;
+
+  const toBall = Math.hypot(ball.position.x - ego.position.x, ball.position.y - ego.position.y, ball.position.z);
+  const targets = (loft: boolean) => {
+    for (let slot = 0; slot < context.team.length; slot += 1) {
+      if (passTarget(context, slot)) mask[offset + (loft ? space.loftBase : space.passBase) + slot] = 1;
+    }
+  };
+
+  if (phase.kind === "kickoffSetup" || phase.kind === "restartSetup") {
+    if (phase.takerId !== ego.playerId || observation.tick < phase.readyTick ||
+        observation.tick >= phase.deadlineTick) return;
+    targets(false);
+    // The engine rejects lofted kickoffs and every non-pass kick at a kickoff.
+    if (phase.kind === "restartSetup" && phase.restart !== "throwIn") targets(true);
+    return;
+  }
+  if (phase.kind !== "live") return;
+
+  if (keeperHeldBy(observation, ego.playerId)) {
+    targets(false);
+    targets(true);
+    return;
+  }
+  if (ball.control.kind === "keeperHeld") return;
+
+  const ownDribble = ball.control.kind === "dribble" && ball.control.playerId === ego.playerId;
+  const mayKick = toBall <= physical.reachM && (ball.control.kind === "free" || ownDribble);
+  if (mayKick) {
+    for (const act of [ACT_SHOOT_LEFT, ACT_SHOOT_CENTER, ACT_SHOOT_RIGHT]) mask[offset + act] = 1;
+    targets(false);
+    targets(true);
+  }
+  if (!ownDribble && toBall <= 3) mask[offset + ACT_TACKLE] = 1;
+  if (ego.definition.role === "goalkeeper" && inKeeperArea(context)) mask[offset + ACT_SAVE] = 1;
+}
+
+/** Converts a legal choice to an engine intent. Returns undefined requests for "none". */
+export function decodeAction(
+  context: AgentContext, space: ActionSpace, move: number, sprint: number, act: number,
+): DecodedAction {
+  const { observation, attack, ego } = context;
+  const movement = decodeMove(move, attack);
+  const base = { movement, sprint: sprint === 1 };
+  if (act === ACT_NONE) return base;
+
+  const { ball, pitch, phase } = observation;
+  const forward = { x: attack, y: 0 };
+  const origin = { x: ball.position.x, y: ball.position.y };
+  const physical = ego.definition.abilities.physical;
+  const gravity = observation.ballConfig?.gravityMps2 ?? 9.81;
+
+  if (act >= ACT_SHOOT_LEFT && act <= ACT_SHOOT_RIGHT) {
+    const side = act === ACT_SHOOT_LEFT ? 1 : act === ACT_SHOOT_RIGHT ? -1 : 0;
+    const aim = unitDirection(origin, { x: attack * pitch.lengthM / 2, y: attack * side * pitch.goalWidthM * 0.29 }, forward);
+    return { ...base, request: { kind: "kick", kickType: "shot", direction: aim, power: SHOT_POWER, loft: SHOT_LOFT } };
+  }
+  if (act === ACT_TACKLE) {
+    return { ...base, request: { kind: "tackle", direction: unitDirection(ego.position, origin, forward) } };
+  }
+  if (act === ACT_SAVE) {
+    const target = lead(origin, ball.velocity, 0.2);
+    return { ...base, request: { kind: "keeperSave", direction: unitDirection(ego.position, target, forward) } };
+  }
+
+  const loft = act >= space.loftBase;
+  const slot = act - (loft ? space.loftBase : space.passBase);
+  const target = passTarget(context, slot);
+  if (!target) return base;
+  const range = Math.hypot(target.x - origin.x, target.y - origin.y);
+  const aim = unitDirection(origin, target, forward);
+
+  if (phase.kind === "restartSetup" && phase.restart === "throwIn") {
+    return { ...base, request: { kind: "throwIn", direction: aim, power: clamp(range / 13, 0.28, 0.7) } };
+  }
+  if (keeperHeldBy(observation, ego.playerId)) {
+    const roll = !loft && range < Math.min(11, physical.maxKeeperRollSpeedMps ** 2 * 0.22);
+    const power = roll ? passingPower(range, physical.maxKeeperRollSpeedMps)
+      : clamp(range / physical.maxKeeperThrowSpeedMps, 0.32, 0.82);
+    return { ...base, request: { kind: "keeperRelease", technique: roll ? "roll" : "throw", direction: aim, power } };
+  }
+  if (loft) {
+    return { ...base, request: {
+      kind: "kick", kickType: "loft", direction: aim, loft: LOFT_PASS,
+      power: loftPower(range, physical.maxKickSpeedMps * 0.75, gravity),
+    } };
+  }
+  return { ...base, request: {
+    kind: "kick", kickType: "pass", direction: aim, loft: 0,
+    power: passingPower(range, physical.maxKickSpeedMps * 0.55),
+  } };
+}
+
+export { MOVE_COUNT };

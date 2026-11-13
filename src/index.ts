@@ -12,3 +12,4 @@ export * from "./session/contracts.js";
 export { MatchSession, createDefaultAIRegistry } from "./session/match-session.js";
 export * from "./runners/headless.js";
 export * from "./runners/replay.js";
+export * from "./training/index.js";
