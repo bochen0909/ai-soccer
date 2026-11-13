@@ -102,6 +102,8 @@ def main():
     parser.add_argument("--league-anchor", nargs="+", default=None,
                         help="one or more policy JSON files to keep as fixed league opponents, e.g. one per generation; "
                              "turns on league training against the CPUs, these anchors, and snapshots of the policy itself")
+    parser.add_argument("--tuned-boost", type=float, default=1.0,
+                        help="league: multiplies how often the tuned (Hard) CPU is drawn, on top of the win-rate weighting")
     parser.add_argument("--snapshot-every", type=int, default=25, help="league: iterations between snapshots of the policy")
     parser.add_argument("--snapshots-kept", type=int, default=6, help="league: how many recent snapshots stay in the pool")
     parser.add_argument("--pfsp-power", type=float, default=2.0,
@@ -144,7 +146,8 @@ def main():
     next_snapshot_id = 10
 
     def pool_message():
-        weights = {key: max(0.05, (1.1 - entry["rate"]) ** args.pfsp_power) for key, entry in league.items()}
+        weights = {key: max(0.05, (1.1 - entry["rate"]) ** args.pfsp_power) * (args.tuned_boost if key == 1 else 1.0)
+                   for key, entry in league.items()}
         return [{"id": key, "spec": entry["spec"], "weight": weights[key]} for key, entry in league.items()]
 
     eval_specs = {"default": "default", "tuned": "tuned"}
