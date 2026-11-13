@@ -1,0 +1,321 @@
+import type { PlayerAction, PlayerId, PlayerState, Vec2, Vec3 } from "../contracts/index.js";
+import {
+  CONTACT_TIME_TOLERANCE,
+  along,
+  dot,
+  goalFrameCapsules,
+  playerCapsule,
+  sphereContactTime,
+  subtract,
+  sweepCapsule,
+} from "./physics-geometry.js";
+import type { Capsule } from "./physics-geometry.js";
+import { attackDirection, inDribbleReach, keeperHoldPosition } from "./reset.js";
+import type { EngineState } from "./reset.js";
+
+export const PHYSICS_TICK_SECONDS = 1 / 60;
+const SUBSTEPS = 4;
+const MAX_EVENTS_PER_SUBSTEP = 128;
+const VELOCITY_TOLERANCE = 1e-8;
+const MINIMUM_BOUNCE_SPEED = 0.3;
+
+type Axis = "x" | "y";
+type Side = -1 | 1;
+
+interface BallCrossing {
+  kind: "goal" | "exit";
+  axis: Axis;
+  side: Side;
+  position: Vec3;
+}
+
+export interface PhysicsOutcome {
+  elapsedSeconds: number;
+  crossing?: BallCrossing;
+}
+
+export class PhysicsError extends Error {
+  constructor(tick: number) {
+    super(`Physics exceeded its collision event limit at tick ${tick}.`);
+    this.name = "PhysicsError";
+  }
+}
+
+type PhysicsEvent = { time: number } & (
+  | { kind: "crossing"; axis: Axis; side: Side; plane: number }
+  | { kind: "ground" }
+  | { kind: "ballContact"; normal: Vec3; player?: PlayerState }
+  | { kind: "wall"; player: PlayerState; axis: Axis; plane: number }
+  | { kind: "playerContact"; first: PlayerState; second: PlayerState }
+);
+
+interface PlayerBounds {
+  min: Vec2;
+  max: Vec2;
+}
+
+export function advancePhysics(state: EngineState, actions: ReadonlyMap<PlayerId, PlayerAction>): PhysicsOutcome {
+  const goalFrames = goalFrameCapsules(state.config.pitch);
+  const bounds = state.players.map((player) => movementBounds(state, player));
+  const substepSeconds = PHYSICS_TICK_SECONDS / SUBSTEPS;
+  let elapsedSeconds = 0;
+
+  for (let substep = 0; substep < SUBSTEPS; substep++) {
+    for (const player of state.players) {
+      applyMovement(player, actions.get(player.playerId), substepSeconds);
+    }
+    applyBallForces(state, substepSeconds);
+
+    let remaining = substepSeconds;
+    let eventCount = 0;
+    // A contact on the tick boundary can leave a second event at the same instant.
+    while (true) {
+      const event = findNextEvent(state, goalFrames, bounds, remaining);
+      const duration = event === undefined ? remaining : Math.min(event.time, remaining);
+      moveBodies(state, duration);
+      elapsedSeconds += duration;
+      remaining = Math.max(0, remaining - duration);
+      if (event === undefined) break;
+      if (++eventCount > MAX_EVENTS_PER_SUBSTEP) throw new PhysicsError(state.tick);
+
+      if (event.kind === "crossing") {
+        state.ball.position[event.axis] = event.plane;
+        updatePlayerState(state, actions, elapsedSeconds);
+        return { elapsedSeconds, crossing: classifyCrossing(state, event.axis, event.side) };
+      }
+      resolveContact(state, event);
+    }
+  }
+
+  updatePlayerState(state, actions, PHYSICS_TICK_SECONDS);
+  return { elapsedSeconds: PHYSICS_TICK_SECONDS };
+}
+
+function applyMovement(player: PlayerState, action: PlayerAction | undefined, seconds: number): void {
+  const { maxSpeedMps, accelerationMps2, brakingMps2 } = player.definition.abilities.physical;
+  const movement = action?.movement ?? { x: 0, y: 0 };
+  const speedLimit = maxSpeedMps * (0.75 + player.stamina * 0.25);
+  const targetSpeed = speedLimit * (action?.sprint ? 1 : 0.7);
+  const target = { x: movement.x * targetSpeed, y: movement.y * targetSpeed };
+  const difference = { x: target.x - player.velocity.x, y: target.y - player.velocity.y };
+  const distance = Math.hypot(difference.x, difference.y);
+  if (distance === 0) return;
+  const rate = difference.x * player.velocity.x + difference.y * player.velocity.y < 0
+    ? brakingMps2 : accelerationMps2;
+  const fraction = Math.min(1, rate * seconds / distance);
+  player.velocity.x += difference.x * fraction;
+  player.velocity.y += difference.y * fraction;
+}
+
+function movementBounds(state: EngineState, player: PlayerState): PlayerBounds {
+  const { lengthM, widthM, keeperAreaDepthM, keeperAreaWidthM } = state.config.pitch;
+  const { radiusM } = player.definition;
+  const min = { x: -lengthM / 2 + radiusM, y: -widthM / 2 + radiusM };
+  const max = { x: lengthM / 2 - radiusM, y: widthM / 2 - radiusM };
+  if (state.ball.control.kind === "keeperHeld" && state.ball.control.playerId === player.playerId) {
+    const defendsNegativeX = attackDirection(state, player.teamId) === 1;
+    if (defendsNegativeX) max.x = Math.min(max.x, -lengthM / 2 + keeperAreaDepthM);
+    else min.x = Math.max(min.x, lengthM / 2 - keeperAreaDepthM);
+    min.y = Math.max(min.y, -keeperAreaWidthM / 2);
+    max.y = Math.min(max.y, keeperAreaWidthM / 2);
+  }
+  // A taker may begin just outside the field. They can reenter without teleportation.
+  min.x = Math.min(min.x, player.position.x);
+  min.y = Math.min(min.y, player.position.y);
+  max.x = Math.max(max.x, player.position.x);
+  max.y = Math.max(max.y, player.position.y);
+  return { min, max };
+}
+
+function applyBallForces(state: EngineState, seconds: number): void {
+  if (state.ball.control.kind === "keeperHeld") return;
+  const { radiusM, gravityMps2, groundDecelerationMps2, maxSpeedMps } = state.config.ball;
+  const { position, velocity } = state.ball;
+  if (position.z <= radiusM && velocity.z <= 0) {
+    if (velocity.z < 0) return;
+    const speed = Math.hypot(velocity.x, velocity.y);
+    if (speed > 0) {
+      const factor = Math.max(0, speed - groundDecelerationMps2 * seconds) / speed;
+      velocity.x *= factor;
+      velocity.y *= factor;
+    }
+  } else {
+    velocity.z -= gravityMps2 * seconds;
+    limitBallSpeed(velocity, maxSpeedMps);
+  }
+}
+
+function findNextEvent(
+  state: EngineState,
+  goalFrames: readonly Capsule[],
+  bounds: readonly PlayerBounds[],
+  duration: number,
+): PhysicsEvent | undefined {
+  let first: PhysicsEvent | undefined;
+  const consider = (event: PhysicsEvent): void => {
+    if (event.time > duration) return;
+    if (first === undefined || event.time < first.time - CONTACT_TIME_TOLERANCE ||
+        (first.kind === "crossing" && event.kind !== "crossing" &&
+          event.time <= first.time + CONTACT_TIME_TOLERANCE)) {
+      first = event;
+    }
+  };
+
+  for (const [index, player] of state.players.entries()) {
+    const limit = bounds[index]!;
+    for (const axis of ["x", "y"] as const) {
+      const velocity = player.velocity[axis];
+      if (Math.abs(velocity) <= VELOCITY_TOLERANCE) continue;
+      const plane = velocity > 0 ? limit.max[axis] : limit.min[axis];
+      const time = Math.max(0, (plane - player.position[axis]) / velocity);
+      consider({ kind: "wall", time, player, axis, plane });
+    }
+    for (let other = index + 1; other < state.players.length; other++) {
+      const second = state.players[other]!;
+      const offset = subtract(onGround(player.position), onGround(second.position));
+      const velocity = subtract(onGround(player.velocity), onGround(second.velocity));
+      if (dot(offset, velocity) >= -VELOCITY_TOLERANCE) continue;
+      const time = sphereContactTime(offset, velocity, player.definition.radiusM + second.definition.radiusM);
+      if (time !== undefined) consider({ kind: "playerContact", time, first: player, second });
+    }
+  }
+
+  if (state.ball.control.kind === "keeperHeld") return first;
+  const { position, velocity } = state.ball;
+  const { radiusM } = state.config.ball;
+  const { lengthM, widthM } = state.config.pitch;
+  if (velocity.z < 0) {
+    consider({ kind: "ground", time: Math.max(0, (radiusM - position.z) / velocity.z) });
+  }
+
+  for (const frame of goalFrames) {
+    const hit = sweepCapsule(position, velocity, radiusM, frame, duration);
+    if (hit !== undefined) consider({ kind: "ballContact", ...hit });
+  }
+  for (const player of state.players) {
+    const relativeVelocity = subtract(velocity, onGround(player.velocity));
+    const hit = sweepCapsule(position, relativeVelocity, radiusM, playerCapsule(player), duration);
+    if (hit !== undefined) consider({ kind: "ballContact", ...hit, player });
+  }
+
+  for (const axis of ["x", "y"] as const) {
+    if (velocity[axis] === 0) continue;
+    const side = velocity[axis] > 0 ? 1 : -1;
+    const plane = side * ((axis === "x" ? lengthM : widthM) / 2 + radiusM);
+    const time = Math.max(0, (plane - position[axis]) / velocity[axis]);
+    consider({ kind: "crossing", time, axis, side, plane });
+  }
+  return first;
+}
+
+function onGround(vector: Vec2): Vec3 {
+  return { ...vector, z: 0 };
+}
+
+function moveBodies(state: EngineState, seconds: number): void {
+  for (const player of state.players) {
+    player.position.x += player.velocity.x * seconds;
+    player.position.y += player.velocity.y * seconds;
+  }
+  if (state.ball.control.kind !== "keeperHeld") {
+    state.ball.position = along(state.ball.position, state.ball.velocity, seconds);
+  }
+}
+
+function classifyCrossing(state: EngineState, axis: Axis, side: Side): BallCrossing {
+  const { goalWidthM, goalHeightM } = state.config.pitch;
+  const { radiusM } = state.config.ball;
+  const { y, z } = state.ball.position;
+  const fitsOpening = Math.abs(y) + radiusM <= goalWidthM / 2 && z + radiusM <= goalHeightM;
+  return { kind: axis === "x" && fitsOpening ? "goal" : "exit", axis, side, position: { ...state.ball.position } };
+}
+
+function resolveContact(state: EngineState, event: Exclude<PhysicsEvent, { kind: "crossing" }>): void {
+  switch (event.kind) {
+    case "wall":
+      event.player.position[event.axis] = event.plane;
+      event.player.velocity[event.axis] = 0;
+      break;
+    case "ground": {
+      state.ball.position.z = state.config.ball.radiusM;
+      const bounce = -state.ball.velocity.z * state.config.ball.groundRestitution;
+      state.ball.velocity.z = bounce >= MINIMUM_BOUNCE_SPEED ? bounce : 0;
+      break;
+    }
+    case "playerContact":
+      resolvePlayerContact(event.first, event.second);
+      break;
+    case "ballContact": {
+      const colliderVelocity = onGround(event.player?.velocity ?? { x: 0, y: 0 });
+      const normalSpeed = dot(subtract(state.ball.velocity, colliderVelocity), event.normal);
+      const impulseSpeed = -(1 + state.config.ball.contactRestitution) * normalSpeed;
+      state.ball.velocity = along(state.ball.velocity, event.normal, impulseSpeed);
+      limitBallSpeed(state.ball.velocity, state.config.ball.maxSpeedMps);
+      if (event.player !== undefined) {
+        state.ball.lastTouchPlayerId = event.player.playerId;
+        if (state.ball.control.kind === "dribble" && state.ball.control.playerId !== event.player.playerId) {
+          state.ball.control = { kind: "free" };
+        }
+      }
+      break;
+    }
+  }
+}
+
+function resolvePlayerContact(first: PlayerState, second: PlayerState): void {
+  const separation = subtract(onGround(first.position), onGround(second.position));
+  const distance = Math.hypot(separation.x, separation.y);
+  const normal = { x: separation.x / distance, y: separation.y / distance, z: 0 };
+  const relativeVelocity = subtract(onGround(first.velocity), onGround(second.velocity));
+  const firstInverseMass = 1 / first.definition.massKg;
+  const secondInverseMass = 1 / second.definition.massKg;
+  const impulse = -dot(relativeVelocity, normal) / (firstInverseMass + secondInverseMass);
+  first.velocity.x += normal.x * impulse * firstInverseMass;
+  first.velocity.y += normal.y * impulse * firstInverseMass;
+  second.velocity.x -= normal.x * impulse * secondInverseMass;
+  second.velocity.y -= normal.y * impulse * secondInverseMass;
+}
+
+function limitBallSpeed(velocity: Vec3, maxSpeed: number): void {
+  const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
+  if (speed <= maxSpeed) return;
+  const scale = maxSpeed / speed;
+  velocity.x *= scale;
+  velocity.y *= scale;
+  velocity.z *= scale;
+}
+
+function updatePlayerState(
+  state: EngineState,
+  actions: ReadonlyMap<PlayerId, PlayerAction>,
+  elapsedSeconds: number,
+): void {
+  for (const player of state.players) {
+    const action = actions.get(player.playerId);
+    const { turnRateRadPerSec, staminaDrainPerSec, staminaRecoveryPerSec } = player.definition.abilities.physical;
+    const moving = action !== undefined && Math.hypot(action.movement.x, action.movement.y) > 0;
+    if (moving) {
+      const target = Math.atan2(action.movement.y, action.movement.x);
+      const difference = wrapAngle(target - player.facingRad);
+      const turn = turnRateRadPerSec * elapsedSeconds;
+      player.facingRad = wrapAngle(player.facingRad + Math.max(-turn, Math.min(turn, difference)));
+    }
+    const exertion = moving && action.sprint ? -staminaDrainPerSec : staminaRecoveryPerSec;
+    player.stamina = Math.max(0, Math.min(1, player.stamina + exertion * elapsedSeconds));
+  }
+
+  if (state.ball.control.kind === "free") return;
+  const holderId = state.ball.control.playerId;
+  const holder = state.players.find((player) => player.playerId === holderId)!;
+  const radius = state.config.ball.radiusM;
+  if (state.ball.control.kind === "keeperHeld") {
+    state.ball.position = keeperHoldPosition(holder, radius);
+    state.ball.velocity = onGround(holder.velocity);
+  } else if (!inDribbleReach(holder, state.ball.position, radius)) {
+    state.ball.control = { kind: "free" };
+  }
+}
+
+function wrapAngle(angle: number): number {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
