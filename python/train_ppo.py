@@ -96,6 +96,8 @@ def main():
     parser.add_argument("--drill", default=None, choices=["shoot", "attack", "pass"], help="train on a short drill, not full matches")
     parser.add_argument("--max-steps", type=int, default=None, help="policy steps before an episode is cut off (drills: 60)")
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="drill reward when a teammate receives a pass")
+    parser.add_argument("--value-warmup", type=int, default=0,
+                        help="iterations that train only the value head, so a pretrained policy is not wrecked by a random critic")
     parser.add_argument("--init", default=None, help="checkpoint to start from, for example a drill-trained policy")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
@@ -195,7 +197,10 @@ def main():
                     clipped = ratio.clamp(1 - args.clip, 1 + args.clip) * b_adv[idx]
                     policy_loss = -torch.min(unclipped, clipped).mean()
                     value_loss = 0.5 * (value - b_ret[idx]).pow(2).mean()
-                    loss = policy_loss + 0.5 * value_loss - args.entropy * entropy.mean()
+                    if iteration <= args.value_warmup:
+                        loss = 0.5 * value_loss
+                    else:
+                        loss = policy_loss + 0.5 * value_loss - args.entropy * entropy.mean()
                     optimizer.zero_grad()
                     loss.backward()
                     nn.utils.clip_grad_norm_(policy.parameters(), 0.5)
