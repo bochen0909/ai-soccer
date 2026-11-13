@@ -18,6 +18,8 @@ const keeperKits = [
   { light: "#dbcaff", main: "#ad8ce8", dark: "#624395", shorts: "#382d53" },
 ];
 const skinColors = ["#d99a70", "#b77851", "#e6af87", "#8c5741", "#c68862"];
+const ballPanelAxes: readonly Vec3[] = [{ x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }];
+const cameraSlope = Math.hypot(0.68, 0.8);
 
 function lerp(from: number, to: number, alpha: number): number {
   return from + (to - from) * alpha;
@@ -63,6 +65,23 @@ function noise(index: number): number {
   return ((Math.imul(index ^ 0x792ae5d3, 0x45d9f3b) >>> 8) & 0xffff) / 0x10000;
 }
 
+function rollPanels(panels: readonly Vec3[], dx: number, dy: number, radius: number): readonly Vec3[] {
+  const distance = Math.hypot(dx, dy);
+  if (distance === 0) return panels;
+  // The rolling axis is perpendicular to travel, and a full turn covers one circumference.
+  const axis = { x: -dy / distance, y: dx / distance };
+  const cos = Math.cos(distance / radius);
+  const sin = Math.sin(distance / radius);
+  return panels.map(({ x, y, z }) => {
+    const parallel = (axis.x * x + axis.y * y) * (1 - cos);
+    return {
+      x: x * cos + axis.y * z * sin + axis.x * parallel,
+      y: y * cos - axis.x * z * sin + axis.y * parallel,
+      z: z * cos + (axis.x * y - axis.y * x) * sin,
+    };
+  });
+}
+
 /** Projects the engine's pitch coordinates into a fixed elevated sideline view. */
 export class PitchRenderer {
   private readonly context: CanvasRenderingContext2D;
@@ -71,6 +90,7 @@ export class PitchRenderer {
   private height = 0;
   private pixelRatio = 0;
   private scale = 1;
+  private ballPanels = ballPanelAxes;
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly config: MatchConfig) {
     const context = canvas.getContext("2d", { alpha: false });
@@ -85,6 +105,23 @@ export class PitchRenderer {
       y: this.height * 0.51 + (y * 0.68 - z * 0.8) * this.scale,
     };
   };
+
+  resetBallRotation(): void {
+    this.ballPanels = ballPanelAxes;
+  }
+
+  advanceBallRotation(previous: SessionSnapshot, current: SessionSnapshot): void {
+    if (!this.ballRolled(previous, current)) return;
+    const before = previous.ball.position;
+    const after = current.ball.position;
+    this.ballPanels = rollPanels(this.ballPanels, after.x - before.x, after.y - before.y, this.config.ball.radiusM);
+  }
+
+  private ballRolled(previous: SessionSnapshot, current: SessionSnapshot): boolean {
+    const groundHeight = this.config.ball.radiusM + 1e-6;
+    return previous.ball.control.kind !== "keeperHeld" && current.ball.control.kind !== "keeperHeld" &&
+      previous.ball.position.z <= groundHeight && current.ball.position.z <= groundHeight;
+  }
 
   draw(previous: SessionSnapshot, current: SessionSnapshot, alpha: number): void {
     if (!this.resize()) return;
@@ -126,7 +163,11 @@ export class PitchRenderer {
     }
     const sorted = players.sort((first, second) => first.position.y - second.position.y);
     for (const player of sorted) this.drawPlayer(player, time);
-    this.drawBall(ball);
+    const panels = this.ballRolled(previous, current)
+      ? rollPanels(this.ballPanels, ball.x - current.ball.position.x, ball.y - current.ball.position.y,
+        this.config.ball.radiusM)
+      : this.ballPanels;
+    this.drawBall(ball, panels);
   }
 
   private resize(): boolean {
@@ -443,16 +484,26 @@ export class PitchRenderer {
       shadowRadius, shadowRadius * 0.56, "rgba(5, 24, 22, .45)");
   }
 
-  private drawBall(ball: Vec3): void {
+  private drawBall(ball: Vec3, panels: readonly Vec3[]): void {
     const ctx = this.context;
     const center = this.project(ball.x, ball.y, ball.z);
     const radius = Math.max(3, this.scale * this.config.ball.radiusM * 1.62);
     ellipse(ctx, center, radius + 2, radius + 2, "rgba(255, 240, 196, .48)");
     ellipse(ctx, center, radius + 1.1, radius + 1.1, "#102019");
     ellipse(ctx, center, radius, radius, "#fff4db");
-    ellipse(ctx, { x: center.x + radius * 0.29, y: center.y + radius * 0.22 },
-      radius * 0.34, radius * 0.32, "#303c37");
-    ellipse(ctx, { x: center.x - radius * 0.34, y: center.y - radius * 0.27 },
-      radius * 0.19, radius * 0.17, "#758078");
+    ctx.fillStyle = "#303c37";
+    for (const panel of panels) {
+      const depth = (0.8 * panel.y + 0.68 * panel.z) / cameraSlope;
+      const side = depth >= 0 ? 1 : -1;
+      const facing = Math.abs(depth);
+      if (facing < 0.05) continue;
+      const x = panel.x * side;
+      const y = (0.68 * panel.y - 0.8 * panel.z) * side / cameraSlope;
+      // A marking narrows as its surface turns toward the edge of the ball.
+      ctx.beginPath();
+      ctx.ellipse(center.x + radius * 0.95 * x, center.y + radius * 0.95 * y,
+        radius * 0.31 * facing, radius * 0.31, Math.atan2(y, x), 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }

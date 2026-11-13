@@ -84,6 +84,7 @@ function start(): void {
 
 function restart(): void {
   session.reset(config, seed, { human });
+  renderer.resetBallRotation();
   timing.align(session.snapshot());
   matchMessage = "";
   messageUntil = 0;
@@ -180,7 +181,8 @@ function draw(now: number): void {
   if (mode === "playing") {
     try {
       frame = timing.advance(now, () => {
-        const command = input.sample(timing.frame().current, config);
+        const previous = timing.frame().current;
+        const command = input.sample(previous, config);
         const result = session.step(command);
         const snapshot = session.snapshot();
         if (command.request && snapshot.selectedPlayerId) {
@@ -203,6 +205,8 @@ function draw(now: number): void {
         if (actionResult) humanAction = undefined;
         const placed = result.events.some((event) => event.kind === "phaseChanged" &&
           (event.phase.kind === "restartSetup" || event.phase.kind === "kickoffSetup"));
+        if (placed) renderer.resetBallRotation();
+        else renderer.advanceBallRotation(previous, snapshot);
         return { snapshot, align: placed, finished: result.status === "finished" };
       });
       if (frame.finished) finish(frame.current);
