@@ -5,3 +5,8 @@ export { ResetError } from "./engine/reset.js";
 export { createArcadeConfig } from "./presets/arcade.js";
 export { createPlayerAbilities } from "./presets/players.js";
 export type { PlayerAbilityPreset } from "./presets/players.js";
+export * from "./controllers/contracts.js";
+export { TeamAIRegistry } from "./controllers/registry.js";
+export { BaselineTeamAI } from "./controllers/baseline.js";
+export * from "./session/contracts.js";
+export { MatchSession, createDefaultAIRegistry } from "./session/match-session.js";
