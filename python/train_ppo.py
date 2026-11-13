@@ -116,7 +116,9 @@ def main():
     parser.add_argument("--minibatches", type=int, default=8)
     parser.add_argument("--target-kl", type=float, default=0.03)
     parser.add_argument("--eval-every", type=int, default=20)
-    parser.add_argument("--eval-episodes", type=int, default=2, help="matches per eval environment")
+    parser.add_argument("--eval-episodes", type=int, default=1, help="matches per eval environment")
+    parser.add_argument("--eval-envs", type=int, default=16,
+                        help="environments per evaluation opponent, spread over 8 processes; matches per evaluation = envs x episodes")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--threads", type=int, default=2)
     args = parser.parse_args()
@@ -159,7 +161,7 @@ def main():
                 eval_specs[name] = spec
         options["pool"] = pool_message()
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
-    eval_shape = (2, 2) if args.league_anchor else (1, 4)
+    eval_shape = (8, max(1, args.eval_envs // 8))
     evals = {name: SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None})
              for name, spec in eval_specs.items()}
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count

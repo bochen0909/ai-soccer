@@ -165,7 +165,7 @@ npm run build
 node scripts/record-demos.mjs --matches 40 --out demos/tuned              # teacher decisions as training data
 python3 python/dagger.py --demos demos/tuned --name dagger2 --rounds 16 --rollout-steps 900
 python3 python/train_ppo.py --name ft1 --init runs/dagger2/latest.pt --lr 1e-4 --entropy 0.001 --clip 0.1 \
-  --value-warmup 10 --iterations 300 --eval-every 25 --eval-episodes 4
+  --value-warmup 10 --iterations 300 --eval-every 25
 python3 python/evaluate_checkpoint.py runs/league1/latest.pt --matches 64       # held-out check in Python
 python3 python/train_ppo.py --name league1 --init runs/ft1/latest.pt --league-anchor models/trained-5v5.json \
   --iterations 600 --lr 1e-4 --clip 0.1 --entropy 0.001 --eval-every 50 --snapshot-every 25 --snapshots-kept 6   # use the old model as anchor before exporting
