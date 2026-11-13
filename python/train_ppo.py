@@ -93,8 +93,9 @@ def main():
     parser.add_argument("--size", type=int, default=5, choices=[5, 11])
     parser.add_argument("--opponent", default="default", choices=["default", "tuned"])
     parser.add_argument("--period-ticks", type=int, default=None, help="shorter halves, for faster episodes")
-    parser.add_argument("--drill", default=None, choices=["shoot", "attack"], help="train on a short drill, not full matches")
+    parser.add_argument("--drill", default=None, choices=["shoot", "attack", "pass"], help="train on a short drill, not full matches")
     parser.add_argument("--max-steps", type=int, default=None, help="policy steps before an episode is cut off (drills: 60)")
+    parser.add_argument("--pass-bonus", type=float, default=0.0, help="drill reward when a teammate receives a pass")
     parser.add_argument("--init", default=None, help="checkpoint to start from, for example a drill-trained policy")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
@@ -119,7 +120,7 @@ def main():
     if args.drill:
         options["drill"] = args.drill
         options["maxSteps"] = args.max_steps or 60
-        options["reward"] = {"possession": 0.0}
+        options["reward"] = {"possession": 0.0, "passCompleted": args.pass_bonus}
     elif args.max_steps:
         options["maxSteps"] = args.max_steps
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)

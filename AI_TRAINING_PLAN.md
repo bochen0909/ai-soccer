@@ -75,7 +75,8 @@ Tuning and evaluation
 Environment
 - [x] Scripted-policy sanity checks: `npm run check-env` (idle, random and chase policies at 5v5 and 11v11; return equals score difference with shaping off, masks always allow "none", observations bounded)
 - [x] Drill scenarios: `shoot` and `attack` (2v1) in `src/training/drills.ts`
-- [ ] Easier attack drill ladder and pass-completion reward (see RL results)
+- [x] Pass drill and pass-completion reward (`passCompleted`, off by default, 0.3 in drills): the policy learned a passing play
+- [ ] Next rungs: 2v1 attack from the pass policy, then 3v2, then full matches initialised from the best drill policy
 - [ ] Fast-forward dead phases (goal pause, halftime, restart placement) so steps are not wasted on them
 - [ ] Opponent can be a second `external` team (self-play)
 - [ ] Per-agent rewards if the shared team reward turns out to be too coarse for credit assignment
@@ -95,6 +96,8 @@ Everything below used the PPO trainer (`python/train_ppo.py`) with one shared ne
 | run2 | Full 5v5 matches against the default CPU, shaped reward, 200 iterations (about 400,000 steps) | Flat. Evaluation goal difference stayed between -3 and -6 per match against the default CPU and between -10 and -14 against Hard (the starting policy scores about -5 and -12). Entropy fell only slightly, from 2.89 to 2.66 |
 | shoot1 | Shooting drill: striker with the ball 8 to 16 m out against the keeper, 6 s episodes, 200 iterations | Learned within about 20 iterations, then plateaued at 50 to 70% scoring. For comparison: idle 0%, random 12%, scripted "shoot centre" 5 to 35%, scripted "shoot at a corner from 12 to 16 m" about 58 to 60%. The policy has matched the best simple rule, mostly by aiming at corners |
 | attack1 | 2v1 attack drill, started from the shooting policy, 250 iterations | 0 to 4% scoring throughout. A scripted run-and-shoot policy scores 0 to 5%, so the drill can only be solved by passing or dribbling past the defender, and the reward arrives only after a whole pass, run and shot line up |
+
+| pass1 | Pass drill (defender right in front of the carrier, open runner near goal), pass bonus 0.3, started from shoot1, 250 iterations | Learned a passing play: scoring rose from about 3% to 25 to 33% in evaluation (20 to 30% in training). A scripted pass-then-shoot policy scores about 2.5% there, and a solo run-and-shoot policy 1% |
 
 What this tells us:
 - The pipeline works end to end: environment, masks, bridge, trainer, drills and evaluation.

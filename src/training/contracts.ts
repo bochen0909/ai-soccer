@@ -48,6 +48,8 @@ export interface RewardWeights {
   ballProgress: number;
   /** Per policy step: positive while the team controls the ball, negative while the opponent does. */
   possession: number;
+  /** A teammate receives a kick from another teammate. Can be farmed by passing back and forth, so keep it for drills. */
+  passCompleted: number;
 }
 
 export interface TrainingEnvOptions {

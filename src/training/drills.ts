@@ -1,11 +1,11 @@
 import type { MatchConfig, ScenarioDefinition, ScenarioPlayerState, Vec2 } from "../contracts/index.js";
 
-export type DrillKind = "shoot" | "attack";
+export type DrillKind = "shoot" | "attack" | "pass";
 
 const MIN_SPACING_M = 1.2;
 const MAX_PLACEMENT_ATTEMPTS = 50;
 
-export const DRILL_KINDS: readonly DrillKind[] = ["shoot", "attack"];
+export const DRILL_KINDS: readonly DrillKind[] = ["shoot", "attack", "pass"];
 
 /** Small deterministic generator so the same seed always builds the same drill. */
 function random(seed: number): () => number {
@@ -24,6 +24,8 @@ function random(seed: number): () => number {
  * toward +x and mirrored by a half turn for the other team, so both sides practise the same situation.
  *   shoot   a striker with the ball 8 to 16 m from goal, with the opposing keeper in goal
  *   attack  a two-on-one: the ball carrier and a runner against one defender and the keeper
+ *   pass    like attack, but the defender is right in front of the carrier and the runner is open near goal,
+ *           so the way through is a pass
  * Everyone else holds a spot away from the action. The striker is the last player on the roster.
  */
 export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 0 | 1, seed: number): ScenarioDefinition {
@@ -64,6 +66,17 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
       // Teammates stay behind the play. Rivals start deep in their half of the pitch, 14 m or more away.
       mates.forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
       foes.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
+    } else if (kind === "pass") {
+      const side = next() < 0.5 ? -1 : 1;
+      ballAt = { x: goalX - between(18, 24), y: side * between(0, 5) };
+      put(carrier.id, ballAt.x - 0.45, ballAt.y);
+      const runner = mates[0];
+      if (runner) put(runner.id, goalX - between(10, 14), -side * between(5, 9));
+      mates.slice(1).forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
+      const [defender, ...rest] = foes;
+      // Close enough to block the run and the shot, but not touching.
+      if (defender) put(defender.id, ballAt.x + between(1.8, 2.8), ballAt.y + between(-0.6, 0.6));
+      rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
     } else {
       const side = next() < 0.5 ? -1 : 1;
       ballAt = { x: goalX - between(20, 26), y: side * between(0, 6) };

@@ -1,5 +1,5 @@
 // Hosts several SoccerTrainingEnv instances and serves them over stdio for a Python trainer.
-// Options include drill ("shoot" or "attack") for short situation drills that end on a goal or dead ball.
+// Options include drill ("shoot", "attack" or "pass") for short situation drills that end on a goal or dead ball.
 // Frames, both directions: u32 little-endian length, u8 type, body.
 //   1 INIT  body JSON  -> 129 JSON {envs, agents, obsSize, actCount, moveCount}
 //   2 RESET body JSON  -> 130 binary step payload
