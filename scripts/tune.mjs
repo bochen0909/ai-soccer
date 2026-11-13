@@ -89,6 +89,7 @@ class Pool {
       };
       for (const worker of this.workers) {
         worker.removeAllListeners("message");
+        worker.removeAllListeners("error");
         worker.on("error", reject);
         worker.on("message", (message) => {
           if (message.error) { reject(new Error(message.error)); return; }

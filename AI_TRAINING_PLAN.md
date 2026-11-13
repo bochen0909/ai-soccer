@@ -64,8 +64,12 @@ Tuning and evaluation
 - [x] Measure fitness variance across seeds (5v5 baseline vs itself: std dev 1.55 goals per match, home advantage +0.23; about 240 matches resolve a 0.2 goal edge). Search default of 24 matches per candidate only separates large differences, so confirm results with `tune compare` on 300 or more held-out matches
 - [ ] Re-measure variance for 11v11
 - [x] Tuning harness: `npm run tune -- variance|search|compare` (evolution strategy over 3 traits and 7 weight multipliers, worker pool, alternating sides, held-out comparison)
-- [ ] First real search and held-out comparison
-- [ ] Tune against the baseline and save the best configuration as a named opponent
+- [x] First real search and held-out comparison (5v5, 20 generations x 16 candidates x 24 matches, seed 1): the tuned team beat the default baseline by +6.24 goals per match (95% interval +/-0.25) over 300 held-out matches, 297 wins, 3 draws, 0 losses, 6.98 goals for and 0.74 against. It holds 83% of the possession, presses hard (aggression 0.96) and shoots from about 6.5 m. This shows it exploits the default baseline's weak defense, not that it plays well against a strong opponent
+- [x] Save the best configuration as a named opponent: `AI_PROFILES.tuned` in `src/presets/ai.ts`, selectable in the browser app (5-a-side only)
+- [ ] Tuned vs tuned sanity check (expect about 0 plus the home advantage)
+- [ ] Iterated search: use the tuned team as the opponent and repeat, building a league of progressively harder opponents
+- [ ] Measure the default keeper's save rate on close shots (6 to 7 m); add keeper constants (line depth, save timing, coverage) to the search space
+- [ ] Tune 11v11 separately; the current tuned profile is disabled for 11-a-side in the app
 - [ ] Elo or win-rate report in `evaluate` for comparing controllers
 
 Environment
@@ -105,4 +109,5 @@ Training infrastructure
 | Tuning before PPO | Gives a trusted fitness measure and a stronger opponent without an ML stack |
 | Shared-weight per-player policy | Scales across 5v5 and 11v11 and fits the masked, padded interface |
 | Attack-frame observations | Lets one policy play either side |
+| Browser app can run human vs CPU and CPU vs CPU with Default or Hard profiles | Lets us watch and play against tuning results directly |
 | Target-based pass actions | Avoids learning continuous aim and power from scratch |

@@ -23,18 +23,29 @@
   <main class="match">
     <div class="match-heading">
       <h1 id="match-title">Quick Match</h1>
-      <select id="match-format" class="tool" aria-label="Match format">
-        <option value="quick">5-a-side · 2 min</option>
-        <option value="full">11-a-side · 6 min</option>
-      </select>
+      <div class="match-options">
+        <select id="match-format" class="tool" aria-label="Match format">
+          <option value="quick">5-a-side · 2 min</option>
+          <option value="full">11-a-side · 6 min</option>
+        </select>
+        <select id="home-control" class="tool" aria-label="Ember FC control">
+          <option value="human">Ember · You</option>
+          <option value="default">Ember · CPU</option>
+          <option value="tuned">Ember · CPU Hard</option>
+        </select>
+        <select id="away-control" class="tool" aria-label="Tidal FC opponent">
+          <option value="default">Tidal · CPU</option>
+          <option value="tuned">Tidal · CPU Hard</option>
+        </select>
+      </div>
     </div>
     <section class="stadium" id="surface" tabindex="0" aria-label="Football pitch" aria-describedby="controls">
       <canvas id="pitch" aria-hidden="true"></canvas>
       <div class="broadcast">
         <div class="scoreboard" aria-label="Match scoreboard">
-          <div class="club"><span class="club-dot home"></span><span>EMBER <small>YOU</small></span></div>
+          <div class="club"><span class="club-dot home"></span><span>EMBER <small id="home-tag">YOU</small></span></div>
           <div class="score"><span id="home-score">0</span><span class="score-divider">–</span><span id="away-score">0</span></div>
-          <div class="club away-club"><span class="club-dot away"></span><span>TIDAL <small>CPU</small></span></div>
+          <div class="club away-club"><span class="club-dot away"></span><span>TIDAL <small id="away-tag">CPU</small></span></div>
           <div class="time"><span id="period">1ST</span><strong id="clock">00:00</strong></div>
         </div>
         <div class="match-status">
@@ -50,7 +61,7 @@
           <button type="button" id="gate-action" class="primary">Kick off <span aria-hidden="true">↗</span></button>
         </div>
       </div>
-      <div class="player-card">
+      <div class="player-card" id="player-card">
         <span class="player-number" id="player-number">—</span>
         <span class="player-data"><strong id="player-name">Ember FC</strong><span class="meter" title="Stamina"><span id="stamina"></span></span></span>
       </div>

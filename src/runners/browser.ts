@@ -1,9 +1,11 @@
 import type { ActionKey, MatchEvent, MatchPhase } from "../contracts/index.js";
 import { createArcadeConfig, createElevenAsideConfig } from "../presets/arcade.js";
+import { isAIProfileId, profileSupports, profileTeamOptions } from "../presets/ai.js";
+import type { AIProfileId } from "../presets/ai.js";
 import { MatchAudio } from "../render/audio.js";
 import { PitchRenderer } from "../render/scene.js";
 import { MatchSession } from "../session/match-session.js";
-import type { SessionSnapshot } from "../session/contracts.js";
+import type { HumanInput, SessionSnapshot } from "../session/contracts.js";
 import { FixedStepClock } from "./fixed-step.js";
 import { KeyboardControls } from "./keyboard.js";
 
@@ -33,6 +35,12 @@ const shotMeter = element("shot-meter");
 const shotPower = element("shot-power");
 const matchTitle = element("match-title");
 const matchFormat = element<HTMLSelectElement>("match-format");
+const homeControl = element<HTMLSelectElement>("home-control");
+const awayControl = element<HTMLSelectElement>("away-control");
+const homeTag = element("home-tag");
+const awayTag = element("away-tag");
+const playerCard = element("player-card");
+const controlsPanel = element("controls");
 const pitch = element<HTMLCanvasElement>("pitch");
 
 let config = matchFormat.value === "full" ? createElevenAsideConfig() : createArcadeConfig();
@@ -46,14 +54,43 @@ const fullNames = ["N. Kova", "M. Silva", "D. Reyes", "I. Okafor", "R. Malik", "
   "L. Costa", "S. Kim", "J. Mensah", "A. Vega", "E. Sato"];
 const seed = 17;
 
+function humanControlled(): boolean {
+  return homeControl.value === "human";
+}
+
+function profileOf(select: HTMLSelectElement): AIProfileId {
+  return isAIProfileId(select.value) ? select.value : "default";
+}
+
 function resetSession(): void {
   const { id: teamId, players } = config.teams[0];
   const taker = players.filter((player) => player.role === "outfield").reduce((nearest, player) =>
     Math.hypot(player.formation.x, player.formation.y) < Math.hypot(nearest.formation.x, nearest.formation.y)
       ? player : nearest);
-  session.reset(config, seed, { human: { teamId, playerId: taker.id } });
+  // The human's teammates always use the default profile.
+  const teams = {
+    [config.teams[0].id]: profileTeamOptions(humanControlled() ? "default" : profileOf(homeControl)),
+    [config.teams[1].id]: profileTeamOptions(profileOf(awayControl)),
+  };
+  session.reset(config, seed, humanControlled() ? { human: { teamId, playerId: taker.id }, teams } : { teams });
 }
 
+/** Tuned profiles only apply to formats they were tuned for. Falls back to the default profile otherwise. */
+function syncControlOptions(): void {
+  const playersPerSide = config.teams[0].players.length;
+  for (const select of [homeControl, awayControl]) {
+    for (const option of Array.from(select.options)) {
+      if (isAIProfileId(option.value)) option.disabled = !profileSupports(option.value, playersPerSide);
+    }
+    if (select.selectedOptions[0]?.disabled) select.value = "default";
+  }
+  homeTag.textContent = humanControlled() ? "YOU" : "CPU";
+  awayTag.textContent = "CPU";
+  playerCard.hidden = !humanControlled();
+  controlsPanel.hidden = !humanControlled();
+}
+
+syncControlOptions();
 resetSession();
 const timing = new FixedStepClock(session.snapshot());
 type Mode = "ready" | "playing" | "paused" | "finished" | "error";
@@ -114,7 +151,8 @@ function showReady(): void {
   pauseButton.disabled = true;
   pauseButton.textContent = "Pause";
   matchTitle.textContent = matchFormat.value === "full" ? "Full Match" : "Quick Match";
-  showGate("Ready for kickoff?", "Take control of Ember FC.", "Kick off");
+  showGate("Ready for kickoff?",
+    humanControlled() ? "Take control of Ember FC." : "Watch Ember FC play Tidal FC.", "Kick off");
 }
 
 function pause(detail: string): void {
@@ -164,6 +202,12 @@ function phaseText(phase: MatchPhase): string {
 function matchHint(snapshot: SessionSnapshot): string {
   if (snapshot.tick < messageUntil) return matchMessage;
   const { phase, selectedPlayerId, ball } = snapshot;
+  if (!humanControlled()) {
+    if (phase.kind === "kickoffSetup" || phase.kind === "restartSetup") {
+      return `${phaseText(phase)} · ${phase.teamId === config.teams[0].id ? "Ember FC" : "Tidal FC"}`;
+    }
+    return phase.kind === "halftime" ? "Half time · Teams switch ends" : "";
+  }
   if (phase.kind === "kickoffSetup" || phase.kind === "restartSetup") {
     if (phase.teamId !== config.teams[0].id) return `${phaseText(phase)} · Tidal FC`;
     if (snapshot.tick < phase.readyTick) return `${phaseText(phase)} · Ember FC`;
@@ -207,7 +251,7 @@ function draw(now: number): void {
     try {
       frame = timing.advance(now, () => {
         const previous = timing.frame().current;
-        const command = input.sample(previous, config);
+        const command: HumanInput = humanControlled() ? input.sample(previous, config) : {};
         const result = session.step(command);
         const snapshot = session.snapshot();
         if (command.request && snapshot.selectedPlayerId) {
@@ -258,9 +302,17 @@ matchFormat.addEventListener("change", () => {
   config = matchFormat.value === "full" ? createElevenAsideConfig() : createArcadeConfig();
   config.rules.directionalKickoff = true;
   renderer = new PitchRenderer(pitch, config);
+  syncControlOptions();
   resetMatch();
   showReady();
 });
+for (const select of [homeControl, awayControl]) {
+  select.addEventListener("change", () => {
+    syncControlOptions();
+    resetMatch();
+    showReady();
+  });
+}
 element("restart").addEventListener("click", restart);
 pauseButton.addEventListener("click", () => mode === "playing" ? pause("Resume whenever you’re ready.") : start());
 soundButton.addEventListener("click", () => {

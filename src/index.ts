@@ -3,6 +3,8 @@ export { SoccerEngine } from "./engine/engine.js";
 export { PHYSICS_TICK_SECONDS, PhysicsError } from "./engine/physics.js";
 export { ResetError } from "./engine/reset.js";
 export { createArcadeConfig, createElevenAsideConfig } from "./presets/arcade.js";
+export { AI_PROFILES, isAIProfileId, profileSupports, profileTeamOptions } from "./presets/ai.js";
+export type { AIProfile, AIProfileId } from "./presets/ai.js";
 export { createPlayerAbilities } from "./presets/players.js";
 export type { PlayerAbilityPreset } from "./presets/players.js";
 export * from "./controllers/contracts.js";
