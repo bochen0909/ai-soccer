@@ -87,7 +87,7 @@ Training infrastructure
 - [ ] Throughput target and profiling (the learner decides every tick, and cloning observations per tick is the main overhead)
 - [x] Policy export and in-engine inference: `python/export_policy.py` writes exact float32 weights to `models/trained-5v5.json`; `NeuralTeamAI` (team AI "neural") runs them in the engine; a test pins its outputs to PyTorch's. In-game, 64 held-out matches: +1.20 ±0.67 against the default CPU and -0.11 ±0.69 against Hard. The browser app offers it as "CPU Trained" (5-a-side)
 - [x] League training: `train_ppo.py --league-anchor` trains against a pool of the default CPU, Hard, an anchor model and snapshots of itself, weighted toward the opponents it beats least (`SET_POOL` in the env server). Results in the table below (league1)
-- [ ] Several anchors, one per generation, promoted only after a 64-match win over the previous one
+- [x] Several anchors, one per generation: `--league-anchor a.json b.json ...` (up to 8), exported generations live in `models/anchors/` (gen1-ft1, gen2-league1). A new generation should be promoted only after a 64-match win over the previous one. Not yet used in a full run
 - [ ] Re-run imitation with more teacher diversity (default and tuned teachers, 11v11) and a bigger network if the policy plateaus
 
 ## RL results so far

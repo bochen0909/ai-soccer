@@ -99,9 +99,9 @@ def main():
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="drill reward when a teammate receives a pass")
     parser.add_argument("--value-warmup", type=int, default=0,
                         help="iterations that train only the value head, so a pretrained policy is not wrecked by a random critic")
-    parser.add_argument("--league-anchor", default=None,
-                        help="policy JSON to keep as a fixed league opponent; turns on league training against the CPUs, "
-                             "this anchor, and snapshots of the policy itself")
+    parser.add_argument("--league-anchor", nargs="+", default=None,
+                        help="one or more policy JSON files to keep as fixed league opponents, e.g. one per generation; "
+                             "turns on league training against the CPUs, these anchors, and snapshots of the policy itself")
     parser.add_argument("--snapshot-every", type=int, default=25, help="league: iterations between snapshots of the policy")
     parser.add_argument("--snapshots-kept", type=int, default=6, help="league: how many recent snapshots stay in the pool")
     parser.add_argument("--pfsp-power", type=float, default=2.0,
@@ -147,10 +147,16 @@ def main():
 
     eval_specs = {"default": "default", "tuned": "tuned"}
     if args.league_anchor:
-        anchor = os.path.abspath(args.league_anchor)
-        for key, name, spec in ((0, "default", "default"), (1, "tuned", "tuned"), (2, "anchor", "model:" + anchor)):
+        if len(args.league_anchor) > 8:
+            raise SystemExit("at most 8 anchors (pool IDs 2 to 9; snapshots start at 10)")
+        entries = [(0, "default", "default"), (1, "tuned", "tuned")]
+        for index, path in enumerate(args.league_anchor):
+            name = "anchor_" + os.path.splitext(os.path.basename(path))[0]
+            entries.append((2 + index, name, "model:" + os.path.abspath(path)))
+        for key, name, spec in entries:
             league[key] = {"name": name, "spec": spec, "rate": 0.5, "snapshot": None}
-        eval_specs["anchor"] = "model:" + anchor
+            if key >= 2:
+                eval_specs[name] = spec
         options["pool"] = pool_message()
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
     eval_shape = (2, 2) if args.league_anchor else (1, 4)
