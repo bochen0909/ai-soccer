@@ -91,6 +91,10 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
 
     let remaining = substepSeconds;
     let eventCount = 0;
+    // Players in zero-time wall and player contacts. A pile of overlapping bodies pressed against a wall
+    // can trade impulses forever without advancing time, so a second overrun is the only real failure.
+    const jammed = new Set<PlayerState>();
+    let settled = false;
     const ballContacts = new Set<Capsule | PlayerState>();
     while (true) {
       const event = findNextEvent(state, goalFrames, remaining, play, firstTouchAvailable, ballContacts);
@@ -99,7 +103,22 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
       elapsedSeconds += duration;
       remaining = Math.max(0, remaining - duration);
       if (event === undefined) break;
-      if (++eventCount > MAX_EVENTS_PER_SUBSTEP) throw new PhysicsError(state.tick);
+      if (duration <= CONTACT_TIME_TOLERANCE) {
+        if (event.kind === "wall") jammed.add(event.player);
+        else if (event.kind === "playerContact") jammed.add(event.first).add(event.second);
+      }
+      if (++eventCount > MAX_EVENTS_PER_SUBSTEP) {
+        if (settled || jammed.size === 0) throw new PhysicsError(state.tick);
+        // Treat the pile-up as perfectly inelastic: everyone involved stops.
+        for (const { velocity } of jammed) {
+          velocity.x = 0;
+          velocity.y = 0;
+        }
+        jammed.clear();
+        settled = true;
+        eventCount = 0;
+        continue;
+      }
       if (duration > CONTACT_TIME_TOLERANCE) ballContacts.clear();
       if (event.kind === "ballContact") ballContacts.add(event.collider);
 

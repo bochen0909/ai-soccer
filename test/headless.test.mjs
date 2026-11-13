@@ -167,3 +167,14 @@ test('a tick-limited benchmark includes throughput without counting a completed 
   assert.equal(measured.matchesPerSecond, 0);
   assert.ok(measured.ticksPerSecond > 0);
 });
+
+test('a pile of players pressed against the end line settles instead of crashing the physics', () => {
+  // Seed 100050 jams home-4, away-keeper and away-1 in a row against the end line at tick 2959.
+  // Before the settle fallback the contacts traded zero-time impulses until the event limit threw.
+  const result = evaluateMatch({
+    seed: 100050,
+    teams: { home: { pluginId: 'baseline' }, away: { pluginId: 'baseline' } },
+    maxTicks: 3600,
+  });
+  assert.ok(result.ticks > 2959);
+});

@@ -61,8 +61,10 @@ Train against the tuned baseline from step 1.
 ## Todo list
 
 Tuning and evaluation
-- [ ] Measure fitness variance across seeds; pick matches per candidate
-- [ ] Tuning harness (random search over baseline traits and weights)
+- [x] Measure fitness variance across seeds (5v5 baseline vs itself: std dev 1.55 goals per match, home advantage +0.23; about 240 matches resolve a 0.2 goal edge). Search default of 24 matches per candidate only separates large differences, so confirm results with `tune compare` on 300 or more held-out matches
+- [ ] Re-measure variance for 11v11
+- [x] Tuning harness: `npm run tune -- variance|search|compare` (evolution strategy over 3 traits and 7 weight multipliers, worker pool, alternating sides, held-out comparison)
+- [ ] First real search and held-out comparison
 - [ ] Tune against the baseline and save the best configuration as a named opponent
 - [ ] Elo or win-rate report in `evaluate` for comparing controllers
 
@@ -78,6 +80,12 @@ Training infrastructure
 - [ ] Persistent worker pool, batched stepping
 - [ ] Throughput target and profiling (the learner decides every tick, and cloning observations per tick is the main overhead)
 - [ ] Policy export and in-engine inference as a controller plugin (for example ONNX)
+
+## Known issues
+
+- **Fixed:** the physics engine threw `Physics exceeded its collision event limit` when several players piled up against a wall (seed 100050 at 5v5, tick 2959). The wall acts like an infinitely heavy body, so contacts between the stacked players traded zero-time impulses forever. The fallback in `src/engine/physics.ts` stops the jammed players, as an inelastic pile-up would, and only throws if the same substep overruns again. A regression test is in `test/headless.test.mjs`. Seeds 100000 to 100119 now all complete.
+- The tuner still counts any remaining engine crash as a draw and reports the seeds, so one bad seed cannot kill a search.
+- Players that end up overlapping (about 0.1 m in the pile above) are not pushed apart after they stop. They separate once they move away from each other. Revisit if overlaps persist visibly.
 
 ## Ideas and open questions
 

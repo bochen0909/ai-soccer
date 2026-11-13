@@ -14,6 +14,24 @@ interface Traits {
   awareness: number;
 }
 
+/** Multipliers on the baseline's hand-tuned constants. All default to 1, which keeps the original behavior. */
+export interface Weights {
+  /** Pass score: clear lane. */
+  passLane: number;
+  /** Pass score: space around the receiver. */
+  passSpace: number;
+  /** Pass score: forward progress. */
+  passProgress: number;
+  /** Pass score: penalty per metre of range. */
+  passRange: number;
+  /** Maximum shooting distance. */
+  shotRange: number;
+  /** Distance the carrier dribbles ahead. */
+  dribbleAhead: number;
+  /** Opponent distance that makes the carrier look for a pass. */
+  pressureRadius: number;
+}
+
 interface PassOption {
   receiverId: PlayerId;
   target: Vec2;
@@ -27,10 +45,15 @@ interface Tactics {
   teammates: readonly PlayerState[];
   opponents: readonly PlayerState[];
   traits: Traits;
+  weights: Weights;
   fullSide: boolean;
 }
 
 const defaults: Traits = { aggression: 0.55, riskTolerance: 0.5, awareness: 0.65 };
+export const DEFAULT_WEIGHTS: Weights = {
+  passLane: 1, passSpace: 1, passProgress: 1, passRange: 1, shotRange: 1, dribbleAhead: 1, pressureRadius: 1,
+};
+const MAX_WEIGHT = 4;
 const clamp = (number: number, min: number, max: number) => Math.max(min, Math.min(max, number));
 const difference = (from: Vec2, to: Vec2): Vec2 => ({ x: to.x - from.x, y: to.y - from.y });
 const length = (vector: Vec2): number => Math.hypot(vector.x, vector.y);
@@ -66,6 +89,11 @@ function move(player: PlayerState, target: Vec2, sprint = false): PlayerIntent {
 function trait(config: unknown, name: keyof Traits): number {
   const value = config && typeof config === "object" ? (config as Partial<Traits>)[name] : undefined;
   return typeof value === "number" && Number.isFinite(value) ? clamp(value, 0, 1) : defaults[name];
+}
+
+function weight(config: unknown, name: keyof Weights): number {
+  const value = config && typeof config === "object" ? (config as Partial<Weights>)[name] : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? clamp(value, 0, MAX_WEIGHT) : DEFAULT_WEIGHTS[name];
 }
 
 function laneClearance(from: Vec2, to: Vec2, opponents: readonly PlayerState[]): number {
@@ -106,8 +134,10 @@ function passingOption(tactics: Tactics, passer: PlayerState, origin: Vec2, maxR
     const lane = laneClearance(origin, target, tactics.opponents);
     const progress = tactics.attack * (target.x - origin.x);
     const keeperPenalty = receiver.definition.role === "goalkeeper" ? 2 : 0;
-    const score = 1.15 * lane + 0.38 * space + (0.08 + 0.1 * tactics.traits.riskTolerance) * progress -
-      0.06 * range - keeperPenalty;
+    const w = tactics.weights;
+    const score = 1.15 * w.passLane * lane + 0.38 * w.passSpace * space +
+      (0.08 + 0.1 * tactics.traits.riskTolerance) * w.passProgress * progress -
+      0.06 * w.passRange * range - keeperPenalty;
     if (!best || score > best.score) best = { receiverId: receiver.playerId, target, range, score };
   }
   return best;
@@ -147,7 +177,7 @@ function carrying(tactics: Tactics, player: PlayerState): PlayerIntent {
   const goalX = tactics.attack * pitch.lengthM / 2;
   const pressure = nearestDistance(origin, tactics.opponents, Infinity);
   const side = origin.y >= 0 ? 1 : -1;
-  const target = onPitch(tactics, { x: origin.x + tactics.attack * 6, y: origin.y * 0.63 });
+  const target = onPitch(tactics, { x: origin.x + tactics.attack * 6 * tactics.weights.dribbleAhead, y: origin.y * 0.63 });
   const dribble = move(player, target);
   if (player.action?.phase === "windup") return idle(player);
   if (player.action || distance(player.position, origin) > player.definition.abilities.physical.reachM * 0.95) return dribble;
@@ -162,7 +192,8 @@ function carrying(tactics: Tactics, player: PlayerState): PlayerIntent {
       clearance = open;
     }
   }
-  const shotRange = (6 + player.definition.abilities.technical.shooting * 11) * (0.8 + tactics.traits.riskTolerance * 0.4);
+  const shotRange = (6 + player.definition.abilities.technical.shooting * 11) * (0.8 + tactics.traits.riskTolerance * 0.4) *
+    tactics.weights.shotRange;
   const shotDistance = distance(origin, shotTarget);
   if (shotDistance <= shotRange && (clearance > 0.35 || shotDistance < 3.5)) {
     return { ...idle(player), request: {
@@ -174,7 +205,7 @@ function carrying(tactics: Tactics, player: PlayerState): PlayerIntent {
   const passSpeed = player.definition.abilities.physical.maxKickSpeedMps * 0.55;
   const pass = passingOption(tactics, player, origin, Math.min(tactics.fullSide ? 26 : 19, passSpeed ** 2 * 0.23));
   const forwardLane = laneClearance(origin, target, tactics.opponents);
-  if (pass && (pressure < 2.4 || forwardLane < 0.9) && pass.score > 0.6 + tactics.traits.riskTolerance) {
+  if (pass && (pressure < 2.4 * tactics.weights.pressureRadius || forwardLane < 0.9) && pass.score > 0.6 + tactics.traits.riskTolerance) {
     return {
       ...idle(player),
       request: { kind: "kick", kickType: "pass", direction: direction(origin, pass.target, tactics.attack),
@@ -341,6 +372,7 @@ export class BaselineTeamAI implements TeamAI {
   readonly version = "4";
   private teamIndex: 0 | 1 = 0;
   private traits: Traits = defaults;
+  private weights: Weights = DEFAULT_WEIGHTS;
   private chaser: PlayerId | undefined;
   private mode: Mode | undefined;
 
@@ -351,6 +383,9 @@ export class BaselineTeamAI implements TeamAI {
       riskTolerance: trait(context.config, "riskTolerance"),
       awareness: trait(context.config, "awareness"),
     };
+    this.weights = Object.fromEntries(
+      (Object.keys(DEFAULT_WEIGHTS) as (keyof Weights)[]).map((name) => [name, weight(context.config, name)]),
+    ) as unknown as Weights;
     this.dispose();
   }
 
@@ -366,7 +401,7 @@ export class BaselineTeamAI implements TeamAI {
     const controlled = teammates.filter((player) => assigned.has(player.playerId));
     const tactics: Tactics = {
       world: observation, attack: observation.attackDirections[this.teamIndex], teammates,
-      opponents: players.filter((player) => player.teamId !== teamId), traits: this.traits,
+      opponents: players.filter((player) => player.teamId !== teamId), traits: this.traits, weights: this.weights,
       fullSide: teammates.length === 11,
     };
     if (observation.phase.kind !== "live") {

@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
     "play": "npm run build && node scripts/serve-match.mjs",
-    "evaluate": "npm run --silent build && node scripts/evaluate.mjs"
+    "evaluate": "npm run --silent build && node scripts/evaluate.mjs",
+    "tune": "npm run --silent build && node scripts/tune.mjs"
   },
   "devDependencies": {
     "typescript": "5.7.3"
