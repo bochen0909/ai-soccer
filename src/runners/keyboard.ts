@@ -75,8 +75,8 @@ function passTarget(
   return best?.pass;
 }
 
-function groundPower(range: number, config: MatchConfig, speed: number): number {
-  return clamp(Math.sqrt(2 * config.ball.groundDecelerationMps2 * range + 18) / speed, 0.3, 0.96);
+function groundPower(range: number, config: MatchConfig, speed: number, arrivalSpeed: number): number {
+  return clamp(Math.sqrt(2 * config.ball.groundDecelerationMps2 * range + arrivalSpeed ** 2) / speed, 0, 0.96);
 }
 
 function kick(
@@ -88,7 +88,9 @@ function kick(
   const maxDistance = kind === "pass" ? Math.min(25, rollout * 0.7) : Math.min(34, maxSpeed ** 2 / 12);
   const pass = passTarget(snapshot, player, config, aim, maxDistance, kind === "pass");
   const origin = snapshot.ball.position;
-  const range = pass ? distance(origin, pass.target) : 7;
+  const range = pass ? distance(origin, pass.target) : kind === "pass" ? 4 : 7;
+  // Keep short passes controllable and give passes into empty space a short rollout.
+  const arrivalSpeed = pass ? Math.min(3.6, 2 + range * 0.075) : 1.8;
   const heading = pass ? direction(origin, pass.target, aim) : aim;
   const fromPlayer = direction(player.position, origin, aim);
   const needsClearLane = snapshot.phase.kind !== "live" &&
@@ -99,7 +101,7 @@ function kick(
     request: {
       kind: "kick", kickType: kind,
       direction: boundarySafeDirection(origin, safeHeading, config.pitch),
-      power: kind === "pass" ? groundPower(range, config, maxSpeed) : clamp(0.44 + range / 54, 0.44, 0.95),
+      power: kind === "pass" ? groundPower(range, config, maxSpeed, arrivalSpeed) : clamp(0.44 + range / 54, 0.44, 0.95),
       loft: kind === "pass" ? 0 : 0.36,
     },
     pass,
@@ -138,7 +140,8 @@ function keeperRelease(
   const speed = player.definition.abilities.physical.maxKeeperRollSpeedMps;
   return {
     kind: "keeperRelease", technique, direction: target ? direction(origin, target, aim) : aim,
-    power: technique === "roll" ? groundPower(range, config, speed) : clamp(range / 22, 0.42, 0.88),
+    power: technique === "roll" ? Math.max(0.3, groundPower(range, config, speed, Math.sqrt(18)))
+      : clamp(range / 22, 0.42, 0.88),
   };
 }
 

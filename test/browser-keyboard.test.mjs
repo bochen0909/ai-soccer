@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createArcadeConfig, MatchSession } from "../dist/index.js";
+import { createArcadeConfig, MatchSession, SoccerEngine } from "../dist/index.js";
 import { KeyboardControls } from "../dist/runners/keyboard.js";
 
 function setup() {
@@ -54,6 +54,37 @@ test("J plays kickoff back to a teammate and a held direction can aim forward", 
   press("KeyJ", "j");
   const forward = controls.sample(snapshot, config);
   assert.ok(forward.request.direction.x > 0);
+});
+
+test("a pass into empty space can roll to a stop before the touchline", () => {
+  const { config, controls, press, keyEvent } = setup();
+  const playerId = "home-4";
+  const start = { x: 8, y: 13, z: config.ball.radiusM };
+  const engine = new SoccerEngine();
+  engine.reset(config, 17, {
+    version: 1, id: "pass-into-space", period: 1, phase: { kind: "live" },
+    players: config.teams.flatMap((team, side) => team.players.map((player, index) => ({
+      playerId: player.id,
+      position: player.id === playerId ? { x: start.x, y: start.y - 0.5 }
+        : { x: side === 0 ? -24 : 24, y: 3 * index },
+      facingRad: Math.PI / 2,
+    }))),
+    ball: {
+      position: start, velocity: { x: 0, y: 0, z: 0 },
+      control: { kind: "dribble", playerId }, lastTouchPlayerId: playerId,
+    },
+  });
+  keyEvent("keydown", "ArrowDown", "ArrowDown");
+  press("KeyJ", "j");
+  const command = controls.sample({ ...engine.snapshot(), selectedPlayerId: playerId }, config);
+  assert.equal(command.pass, undefined);
+  const actions = [{ playerId, movement: { x: 0, y: 0 }, sprint: false, request: { ...command.request, id: 1 } }];
+  for (let tick = 0; tick < 240; tick += 1) engine.step({ tick, actions: tick === 0 ? actions : [] });
+  const { ball, phase } = engine.snapshot();
+  const distance = Math.hypot(ball.position.x - start.x, ball.position.y - start.y);
+  assert.equal(phase.kind, "live");
+  assert.ok(distance > 4 && distance < 6, `pass rolled ${distance.toFixed(1)} m`);
+  assert.equal(Math.hypot(ball.velocity.x, ball.velocity.y, ball.velocity.z), 0);
 });
 
 test("Q picks a teammate with possession or an outfielder, while Shift+Q can select the keeper", () => {
