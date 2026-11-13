@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a1019">
+  <title>Touchline Football</title>
+  <link rel="stylesheet" href="/browser/match.css">
+  <script type="module" src="/dist/runners/browser.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span> TOUCHLINE<span class="brand-period">.</span></div>
+      <div class="toolbar">
+        <button type="button" id="sound" class="tool" aria-pressed="true">Sound on</button>
+        <button type="button" id="restart" class="tool">New match</button>
+        <button type="button" id="pause" class="tool pause" disabled>Pause</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="match">
+    <div class="match-heading">
+      <h1>Quick Match</h1>
+      <p>5-a-side <span aria-hidden="true">/</span> 2 min</p>
+    </div>
+    <section class="stadium" id="surface" tabindex="0" aria-label="Football pitch" aria-describedby="controls">
+      <canvas id="pitch" aria-hidden="true"></canvas>
+      <div class="broadcast">
+        <div class="scoreboard" aria-label="Match scoreboard">
+          <div class="club"><span class="club-dot home"></span><span>EMBER <small>YOU</small></span></div>
+          <div class="score"><span id="home-score">0</span><span class="score-divider">–</span><span id="away-score">0</span></div>
+          <div class="club away-club"><span class="club-dot away"></span><span>TIDAL <small>CPU</small></span></div>
+          <div class="time"><span id="period">1ST</span><strong id="clock">00:00</strong></div>
+        </div>
+        <span id="phase" class="phase">KICKOFF</span>
+      </div>
+      <div class="game-message" id="game-message" role="status" hidden></div>
+      <div class="gate" id="gate">
+        <div class="gate-card">
+          <h2 id="gate-title">Ready for kickoff?</h2>
+          <p id="gate-copy">Take control of Ember FC.</p>
+          <button type="button" id="gate-action" class="primary">Kick off <span aria-hidden="true">↗</span></button>
+        </div>
+      </div>
+      <div class="player-card">
+        <span class="player-number" id="player-number">—</span>
+        <span class="player-data"><strong id="player-name">Ember FC</strong><span class="meter" title="Stamina"><span id="stamina"></span></span></span>
+      </div>
+      <div class="shot-meter" id="shot-meter" hidden>
+        <span>Shot power</span><span class="meter"><span id="shot-power"></span></span>
+      </div>
+    </section>
+    <div class="controls" id="controls" aria-label="Keyboard controls">
+      <span class="control"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Move</span></span>
+      <span class="control"><kbd>Shift</kbd><span>Sprint</span></span>
+      <span class="control"><kbd>J</kbd><span>Pass</span></span>
+      <span class="control"><kbd>K</kbd><span>Hold to shoot</span></span>
+      <span class="control"><kbd>L</kbd><span>Loft</span></span>
+      <span class="control"><kbd>Space</kbd><span>Tackle / save</span></span>
+      <span class="control"><kbd>Q</kbd><span>Switch</span></span>
+      <span class="control"><kbd>Esc</kbd><span>Pause</span></span>
+    </div>
+  </main>
+</body>
+</html>

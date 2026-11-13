@@ -1,0 +1,204 @@
+import type { MatchEvent, MatchPhase } from "../contracts/index.js";
+import { createArcadeConfig } from "../presets/arcade.js";
+import { MatchAudio } from "../render/audio.js";
+import { PitchRenderer } from "../render/scene.js";
+import { MatchSession } from "../session/match-session.js";
+import type { SessionSnapshot } from "../session/contracts.js";
+import { FixedStepClock } from "./fixed-step.js";
+import { KeyboardControls } from "./keyboard.js";
+
+function element<T extends HTMLElement>(id: string): T {
+  const target = document.getElementById(id);
+  if (!target) throw new Error(`Missing match element ${id}`);
+  return target as T;
+}
+
+const surface = element("surface");
+const gate = element("gate");
+const gateTitle = element("gate-title");
+const gateCopy = element("gate-copy");
+const gateAction = element<HTMLButtonElement>("gate-action");
+const pauseButton = element<HTMLButtonElement>("pause");
+const soundButton = element<HTMLButtonElement>("sound");
+const scoreboard = [element("home-score"), element("away-score")];
+const periodLabel = element("period");
+const clockLabel = element("clock");
+const phaseLabel = element("phase");
+const message = element("game-message");
+const playerNumber = element("player-number");
+const playerName = element("player-name");
+const staminaMeter = element("stamina");
+const shotMeter = element("shot-meter");
+const shotPower = element("shot-power");
+
+const config = createArcadeConfig();
+const audio = new MatchAudio();
+const input = new KeyboardControls(surface);
+const renderer = new PitchRenderer(element<HTMLCanvasElement>("pitch"), config);
+const session = new MatchSession();
+const players = new Map(config.teams[0].players.map(({ id }, index) => [id, index]));
+const names = ["N. Kova", "M. Silva", "D. Reyes", "T. Moss", "A. Vega"];
+const seed = 17;
+const human = { teamId: config.teams[0].id, playerId: config.teams[0].players[4].id };
+
+session.reset(config, seed, { human });
+const timing = new FixedStepClock(session.snapshot());
+type Mode = "ready" | "playing" | "paused" | "finished" | "error";
+let mode: Mode = "ready";
+let sound = true;
+let matchMessage = "";
+let messageUntil = 0;
+
+function showGate(title: string, detail: string, action: string): void {
+  gateTitle.textContent = title;
+  gateCopy.textContent = detail;
+  gateAction.textContent = action;
+  gate.hidden = false;
+}
+
+function start(): void {
+  audio.unlock();
+  input.clear();
+  timing.align();
+  mode = "playing";
+  gate.hidden = true;
+  pauseButton.disabled = false;
+  pauseButton.textContent = "Pause";
+  surface.focus({ preventScroll: true });
+}
+
+function restart(): void {
+  session.reset(config, seed, { human });
+  timing.align(session.snapshot());
+  matchMessage = "";
+  messageUntil = 0;
+  start();
+}
+
+function pause(detail: string): void {
+  if (mode !== "playing") return;
+  mode = "paused";
+  input.clear();
+  timing.align();
+  pauseButton.textContent = "Resume";
+  showGate("Match paused", detail, "Resume match");
+}
+
+function finish(snapshot: SessionSnapshot): void {
+  mode = "finished";
+  input.clear();
+  pauseButton.disabled = true;
+  const [home, away] = snapshot.score;
+  const result = home === away ? "Draw" : home > away ? "Ember FC wins" : "Tidal FC wins";
+  showGate("Full time", `${result} · ${home}–${away}`, "Play again");
+}
+
+function receive(events: readonly MatchEvent[]): void {
+  audio.play(events);
+  for (const event of events) {
+    if (event.kind === "goal") {
+      matchMessage = event.teamId === human.teamId ? "GOAL · EMBER FC" : "GOAL · TIDAL FC";
+      messageUntil = event.tick + config.rules.goalPauseTicks;
+    } else if (event.kind === "actionContact" && (event.outcome === "caught" || event.outcome === "parried")) {
+      matchMessage = event.outcome === "caught" ? "Keeper holds it" : "Keeper parries";
+      messageUntil = event.tick + 48;
+    }
+  }
+}
+
+function phaseText(phase: MatchPhase): string {
+  switch (phase.kind) {
+    case "kickoffSetup": return "Kickoff";
+    case "restartSetup": return { throwIn: "Throw-in", goalKick: "Goal kick", corner: "Corner" }[phase.restart];
+    case "live": return "Live";
+    case "goalPause": return "Goal";
+    case "halftime": return "Half time";
+    case "fullTime": return "Full time";
+  }
+}
+
+function matchHint(snapshot: SessionSnapshot): string {
+  if (snapshot.tick < messageUntil) return matchMessage;
+  const { phase, selectedPlayerId, ball } = snapshot;
+  if (phase.kind === "kickoffSetup" || phase.kind === "restartSetup") {
+    if (phase.teamId !== human.teamId) return `${phaseText(phase)} · Tidal FC`;
+    if (snapshot.tick < phase.readyTick) return `${phaseText(phase)} · Ember FC`;
+    if (selectedPlayerId === phase.takerId) return "Press J to put the ball in play";
+    return "Press Q to select the taker";
+  }
+  if (phase.kind === "halftime") return "Half time · Teams switch ends";
+  if (ball.control.kind === "keeperHeld" && ball.control.playerId === selectedPlayerId) {
+    return "J to roll · L to throw";
+  }
+  return "";
+}
+
+function paintHud(snapshot: SessionSnapshot): void {
+  for (const [index, score] of snapshot.score.entries()) scoreboard[index].textContent = String(score);
+  periodLabel.textContent = snapshot.period === 1 ? "1ST" : "2ND";
+  const elapsedTicks = (snapshot.period === 2 ? config.periodTicks[0] : 0) +
+    config.periodTicks[snapshot.period - 1] - snapshot.remainingPeriodTicks;
+  const elapsed = Math.floor(elapsedTicks / 60);
+  clockLabel.textContent = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
+  phaseLabel.textContent = phaseText(snapshot.phase).toUpperCase();
+  const selected = snapshot.players.find(({ playerId }) => playerId === snapshot.selectedPlayerId);
+  const index = selected ? players.get(selected.playerId) : undefined;
+  playerNumber.textContent = index === undefined ? "—" : String(index === 0 ? 1 : index + 6);
+  playerName.textContent = index === undefined ? "Ember FC" : names[index];
+  staminaMeter.style.transform = `scaleX(${selected?.stamina ?? 1})`;
+  shotMeter.hidden = mode !== "playing" || input.shotCharge <= 0;
+  shotPower.style.transform = `scaleX(${input.shotCharge})`;
+  const hint = mode === "playing" ? matchHint(snapshot) : "";
+  if (message.textContent !== hint) message.textContent = hint;
+  message.hidden = hint === "";
+}
+
+function draw(now: number): void {
+  let frame = timing.frame();
+  if (mode === "playing") {
+    try {
+      frame = timing.advance(now, () => {
+        const result = session.step(input.sample(timing.frame().current, config));
+        const snapshot = session.snapshot();
+        receive(result.events);
+        const placed = result.events.some((event) => event.kind === "phaseChanged" &&
+          (event.phase.kind === "restartSetup" || event.phase.kind === "kickoffSetup"));
+        return { snapshot, align: placed, finished: result.status === "finished" };
+      });
+      if (frame.finished) finish(frame.current);
+      else if (frame.pauseReason) pause("The match paused while the browser was busy.");
+    } catch (error) {
+      console.error(error);
+      mode = "error";
+      input.clear();
+      timing.align();
+      pauseButton.disabled = true;
+      showGate("Match interrupted", "Start a new match to continue.", "New match");
+      frame = timing.frame();
+    }
+  }
+  renderer.draw(frame.previous, frame.current, frame.alpha);
+  paintHud(frame.current);
+  requestAnimationFrame(draw);
+}
+
+gateAction.addEventListener("click", () => mode === "finished" || mode === "error" ? restart() : start());
+element("restart").addEventListener("click", restart);
+pauseButton.addEventListener("click", () => mode === "playing" ? pause("Resume whenever you’re ready.") : start());
+soundButton.addEventListener("click", () => {
+  sound = !sound;
+  audio.setEnabled(sound);
+  soundButton.textContent = sound ? "Sound on" : "Sound off";
+  soundButton.setAttribute("aria-pressed", String(sound));
+  if (mode === "playing") surface.focus({ preventScroll: true });
+});
+window.addEventListener("keydown", (event) => {
+  if (event.code !== "Escape" || event.repeat) return;
+  if (mode === "playing") pause("Resume whenever you’re ready.");
+  else if (mode === "paused" && surface.contains(document.activeElement)) start();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) pause("Resume to return to the pitch.");
+});
+window.addEventListener("blur", () => pause("Resume to return to the pitch."));
+requestAnimationFrame(draw);
