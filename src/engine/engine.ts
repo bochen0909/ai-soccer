@@ -125,7 +125,8 @@ export class SoccerEngine implements MatchEngine {
     if (!state.config.teams.some((team) => team.id === teamId)) {
       throw new RangeError(`Unknown team ${teamId}`);
     }
-    return structuredClone({ ...this.view(state), teamId, pitch: state.config.pitch, events: state.events });
+    const { pitch, ball: ballConfig, tuning } = state.config;
+    return structuredClone({ ...this.view(state), teamId, pitch, ballConfig, tuning, events: state.events });
   }
 
   step(frame: ActionFrame): TickResult {

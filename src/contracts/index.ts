@@ -94,7 +94,7 @@ export interface MatchConfig {
   periodTicks: readonly [number, number];
   firstKickoffTeamId: TeamId;
   rules: MatchRules;
-  tuning: { version: 1 };
+  tuning: { version: 1 | 2 };
 }
 
 export type RestartKind = "kickoff" | "throwIn" | "corner" | "goalKick";
@@ -257,6 +257,8 @@ export interface RenderSnapshot {
 export interface TeamObservation extends RenderSnapshot {
   teamId: TeamId;
   pitch: PitchConfig;
+  ballConfig?: BallConfig;
+  tuning?: MatchConfig["tuning"];
   events: readonly MatchEvent[];
 }
 

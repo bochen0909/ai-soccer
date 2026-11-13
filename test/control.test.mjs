@@ -437,3 +437,25 @@ test('the baseline keeper reads a reachable shot, catches it, and releases it', 
     kind === 'actionContact' && outcome === 'released' && action.playerId === 'away-keeper'));
   assert.deepEqual(session.snapshot().score, [0, 0]);
 });
+
+test('the baseline keeper parries a reachable ground shot and concedes a wider one', () => {
+  function playShot(y, tuningVersion) {
+    const setup = fixture();
+    setup.config.tuning.version = tuningVersion;
+    setup.player('away-keeper').position = { x: 28, y: 0 };
+    setup.scenario.ball.position = { x: 26.4, y, z: setup.config.ball.radiusM };
+    setup.scenario.ball.velocity = { x: 20, y: 0, z: 0 };
+    const session = new MatchSession();
+    session.reset(setup.config, 17, {}, setup.scenario);
+    const events = Array.from({ length: 25 }, () => session.step()).flatMap((result) => result.events);
+    return {
+      parried: events.some((event) => event.kind === 'actionContact' &&
+        event.action.playerId === 'away-keeper' && event.outcome === 'parried'),
+      goals: session.snapshot().score[0],
+    };
+  }
+
+  assert.deepEqual(playShot(0.55, 2), { parried: true, goals: 0 });
+  assert.deepEqual(playShot(0.8, 2), { parried: false, goals: 1 });
+  assert.deepEqual(playShot(0.55, 1), { parried: false, goals: 1 });
+});

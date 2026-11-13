@@ -130,7 +130,7 @@ function validateConfig(config: MatchConfig, seed: number): void {
   const { pitch, ball, teams, rules, tuning, periodTicks } = config;
   check(pitch && ball && rules && tuning, "configuration", "config", "missing pitch, ball, rules, or tuning");
   check(rules.version === 1, "configuration", "rules.version", "unsupported version");
-  check(tuning.version === 1, "configuration", "tuning.version", "unsupported version");
+  check(tuning.version === 1 || tuning.version === 2, "configuration", "tuning.version", "unsupported version");
 
   const pitchDimensions = [
     "lengthM", "widthM", "goalWidthM", "goalHeightM", "postRadiusM", "goalAreaDepthM",

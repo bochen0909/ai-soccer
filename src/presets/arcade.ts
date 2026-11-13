@@ -63,6 +63,6 @@ export function createArcadeConfig(): MatchConfig {
       keeperHoldTicks: 360,
       restartExclusionM: 3,
     },
-    tuning: { version: 1 },
+    tuning: { version: 2 },
   };
 }

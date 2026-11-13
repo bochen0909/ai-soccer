@@ -1,4 +1,6 @@
 import type { AttackDirection, PlayerId, TeamObservation, Vec2 } from "../contracts/index.js";
+import { keeperSaveTiming, keeperSaveVolumes } from "../engine/keeper-save.js";
+import { capsuleDistanceSquared } from "../engine/physics-geometry.js";
 import type {
   AIContext, ControlAssignment, PassIntention, PlayerIntent, TeamAI, TeamDecisionContext,
 } from "./contracts.js";
@@ -224,36 +226,24 @@ function formation(tactics: Tactics, player: PlayerState, mode: Mode): Vec2 {
 }
 
 function saveAim(tactics: Tactics, player: PlayerState, ownGoalX: number): Vec2 | undefined {
-  const { ball, pitch } = tactics.world;
-  const { abilities, bodyHeightM, radiusM } = player.definition;
-  const skill = abilities.technical.goalkeeping;
-  const windup = 6 - Math.round(3 * skill);
-  const reach = abilities.physical.reachM * (0.82 + 0.18 * skill);
+  const { ball, ballConfig, pitch, tuning } = tactics.world;
+  const { windup, active } = keeperSaveTiming(player.definition.abilities.technical.goalkeeping);
+  const ballRadius = ballConfig?.radiusM ?? 0.11;
+  const gravity = ballConfig?.gravityMps2 ?? 9.81;
   let best: { aim: Vec2; miss: number } | undefined;
 
-  // A low shot can pass below the extended hand even if its horizontal range
-  // is short. Search the active window for the closest path through the save.
-  for (let tick = windup; tick < windup + 6; tick++) {
+  for (let tick = windup; tick < windup + active; tick++) {
     const time = tick / 60;
     const predicted = lead(ball.position, ball.velocity, time);
-    const height = Math.max(0.1, ball.position.z + ball.velocity.z * time - 4.905 * time ** 2);
+    const height = Math.max(ballRadius, ball.position.z + ball.velocity.z * time - 0.5 * gravity * time ** 2);
     const areaDepth = (predicted.x - ownGoalX) * tactics.attack;
     if (areaDepth < 0 || areaDepth > pitch.keeperAreaDepthM ||
         Math.abs(predicted.y) > pitch.keeperAreaWidthM / 2) continue;
-    const keeper = lead(player.position, player.velocity, time);
-    const range = distance(keeper, predicted);
-    const handWidth = Math.min(radiusM, reach * 0.38);
-    const handExtension = reach - handWidth;
-    const lowerHeight = bodyHeightM * 0.2;
-    const upperHeight = bodyHeightM * 0.7;
-    const rise = upperHeight - lowerHeight;
-    const heightAboveLow = height - lowerHeight;
-    const fraction = clamp(
-      (range * handExtension + heightAboveLow * rise) / (handExtension ** 2 + rise ** 2), 0, 1,
-    );
-    const miss = Math.hypot(range - fraction * handExtension, heightAboveLow - fraction * rise);
-    if (miss < handWidth + 0.12 && (!best || miss < best.miss)) {
-      best = { aim: direction(keeper, predicted, tactics.attack), miss };
+    const position = lead(player.position, player.velocity, time);
+    const aim = direction(position, predicted, tactics.attack);
+    for (const volume of keeperSaveVolumes({ ...player, position }, aim, tuning?.version === 2)) {
+      const miss = Math.sqrt(capsuleDistanceSquared({ ...predicted, z: height }, volume)) - volume.radiusM;
+      if (miss < ballRadius && (!best || miss < best.miss)) best = { aim, miss };
     }
   }
   return best?.aim;
@@ -311,7 +301,7 @@ function passingRun(tactics: Tactics, player: PlayerState, intention: PassIntent
 /** Deterministic formation tactics with one pressing or chasing outfield player. */
 export class BaselineTeamAI implements TeamAI {
   readonly id = "baseline";
-  readonly version = "1";
+  readonly version = "2";
   private teamIndex: 0 | 1 = 0;
   private traits: Traits = defaults;
   private chaser: PlayerId | undefined;

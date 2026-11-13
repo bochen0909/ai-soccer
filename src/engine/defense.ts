@@ -1,5 +1,6 @@
 import type { ActionRequest, PlayerState, Vec3 } from "../contracts/index.js";
 import { executionFactors, footQuality } from "./abilities.js";
+import { keeperSaveTiming, keeperSaveVolumes } from "./keeper-save.js";
 import { along, capsuleDistanceSquared, sweepCapsule } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
 import { attackDirection, keeperHoldPosition } from "./reset.js";
@@ -16,8 +17,7 @@ export function defenseTiming(player: PlayerState, request: DefenseRequest) {
     const skill = player.definition.abilities.technical.tackling;
     return { windup: 7 - Math.round(3 * skill), active: 4, recovery: 13 - Math.round(5 * skill) };
   }
-  const skill = player.definition.abilities.technical.goalkeeping;
-  return { windup: 6 - Math.round(3 * skill), active: 6, recovery: 14 - Math.round(5 * skill) };
+  return keeperSaveTiming(player.definition.abilities.technical.goalkeeping);
 }
 
 function tackleVolume(state: EngineState, player: PlayerState, request: DefenseRequest): Capsule {
@@ -33,24 +33,6 @@ function tackleVolume(state: EngineState, player: PlayerState, request: DefenseR
     z: state.config.ball.radiusM,
   });
   return { start: footCenter(reach * 0.35), end: footCenter(reach - radiusM), radiusM };
-}
-
-function saveVolume(state: EngineState, player: PlayerState, request: DefenseRequest): Capsule {
-  const { abilities, radiusM: bodyRadius, bodyHeightM } = player.definition;
-  const { exertion } = executionFactors(state, player);
-  const reach = abilities.physical.reachM * (0.82 + 0.18 * abilities.technical.goalkeeping) *
-    (0.88 + 0.12 * exertion);
-  const radiusM = Math.min(bodyRadius * 0.92, reach * 0.36);
-  const extension = reach - radiusM;
-  return {
-    start: { ...player.position, z: bodyHeightM * 0.2 },
-    end: {
-      x: player.position.x + request.direction.x * extension,
-      y: player.position.y + request.direction.y * extension,
-      z: bodyHeightM * 0.7,
-    },
-    radiusM,
-  };
 }
 
 /** Restricts a linear path to the times at which it intersects an interval. */
@@ -88,11 +70,11 @@ export function defenseCandidate(
   }
   const times: [number, number] = [0, duration];
   const ballRadius = state.config.ball.radiusM;
-  let volume: Capsule;
+  let volumes: Capsule[];
   let sweepRadius = 0;
   if (request.kind === "keeperSave") {
     if (player.definition.role !== "goalkeeper" || !saveInterval(state, player, times)) return undefined;
-    volume = saveVolume(state, player, request);
+    volumes = keeperSaveVolumes(player, request.direction, state.config.tuning.version === 2);
     sweepRadius = ballRadius;
   } else {
     if (control.kind === "dribble" &&
@@ -102,7 +84,7 @@ export function defenseCandidate(
     // Standing tackles can only contact a ball low enough to be put under foot control.
     const top = ballRadius + player.definition.radiusM;
     if (!clipAxis(times, ball.position.z, ball.velocity.z, ballRadius, top)) return undefined;
-    volume = tackleVolume(state, player, request);
+    volumes = [tackleVolume(state, player, request)];
   }
 
   const relativeVelocity = {
@@ -111,11 +93,15 @@ export function defenseCandidate(
     z: ball.velocity.z,
   };
   const relativePosition = along(ball.position, relativeVelocity, times[0]);
-  if (capsuleDistanceSquared(relativePosition, volume) <= (volume.radiusM + sweepRadius) ** 2) {
-    return { time: times[0] };
+  let earliest = Infinity;
+  for (const volume of volumes) {
+    if (capsuleDistanceSquared(relativePosition, volume) <= (volume.radiusM + sweepRadius) ** 2) {
+      return { time: times[0] };
+    }
+    const hit = sweepCapsule(relativePosition, relativeVelocity, sweepRadius, volume, times[1] - times[0]);
+    if (hit) earliest = Math.min(earliest, hit.time);
   }
-  const hit = sweepCapsule(relativePosition, relativeVelocity, sweepRadius, volume, times[1] - times[0]);
-  return hit === undefined ? undefined : { time: times[0] + hit.time };
+  return Number.isFinite(earliest) ? { time: times[0] + earliest } : undefined;
 }
 
 export function resolveDefense(
