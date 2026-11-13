@@ -9,6 +9,7 @@ const types = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
 };
 const port = Number(process.env.PORT ?? "4173");
 if (!Number.isInteger(port) || port < 0 || port > 65535) throw new RangeError("PORT must be an integer from 0 to 65535");
@@ -23,7 +24,7 @@ const server = createServer(async (request, response) => {
     const relative = pathname === "/" ? "browser/index.html" : pathname.slice(1);
     const file = resolve(root, relative);
     const allowed = file === resolve(root, "browser/index.html") ||
-      file === resolve(root, "browser/match.css") || file.startsWith(resolve(root, "dist") + sep);
+      file === resolve(root, "browser/match.css") || file === resolve(root, "models/trained-5v5.json") || file.startsWith(resolve(root, "dist") + sep);
     const type = types[extname(file)];
     if (!allowed || !type || !(await stat(file)).isFile()) {
       response.writeHead(404).end("Not found");

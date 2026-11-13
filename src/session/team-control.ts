@@ -41,13 +41,13 @@ export class TeamControl {
   }
 
   reset(
-    registry: TeamAIRegistry, team: TeamDefinition, teamIndex: 0 | 1, seed: number,
+    registry: TeamAIRegistry, team: TeamDefinition, opponent: TeamDefinition, teamIndex: 0 | 1, seed: number,
     options: TeamControlOptions, failures: ControllerFailure[],
   ): void {
     try {
       this.plugin = registry.create(this.pluginId);
       this.plugin.reset(structuredClone({
-        teamId: this.teamId, teamIndex, players: team.players, config: options.config,
+        teamId: this.teamId, teamIndex, players: team.players, opponents: opponent.players, config: options.config,
         contractVersion: 1 as const, seed,
       }));
     } catch (error) {

@@ -31,6 +31,8 @@ export interface AIContext {
   teamId: TeamId;
   teamIndex: 0 | 1;
   players: readonly PlayerDefinition[];
+  /** The other team's players in roster order, for controllers that index opponents the way a trained policy does. */
+  opponents?: readonly PlayerDefinition[];
   config: unknown;
   contractVersion: 1;
   seed: number;

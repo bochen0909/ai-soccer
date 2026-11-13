@@ -2,17 +2,20 @@ import { availableParallelism } from "node:os";
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { Worker } from "node:worker_threads";
+import { AI_PROFILES } from "../dist/index.js";
 
 const usage = `Usage:
   npm run --silent tune -- variance [--matches N] [--seed N] [--size 5|11]
   npm run --silent tune -- search [--generations N] [--population N] [--matches N] [--seed N]
                                   [--size 5|11] [--opponent PATH] [--out PATH]
-  npm run --silent tune -- compare --params PATH [--matches N] [--seed N] [--size 5|11] [--opponent PATH]
+  npm run --silent tune -- compare (--params PATH | --model PATH) [--matches N] [--seed N] [--size 5|11]
+                                   [--opponent PATH | --opponent-profile default|tuned]
 
 variance  Plays the default baseline against itself on both sides to measure noise and home bias.
 search    Evolution strategy over baseline traits and weights. Fitness is goal difference against the
           opponent, alternating sides. Writes PATH (full history) and PATH.teams.json for the evaluate CLI.
-compare   Plays saved parameters against the opponent on held-out seeds and reports a confidence interval.
+compare   Plays saved parameters, or a trained policy (--model), against the opponent on held-out seeds and
+          reports a confidence interval.
 
 Options:
   --matches N      Matches per candidate (search, default 24) or in total (variance, compare; default 200).
@@ -25,6 +28,7 @@ const options = {
   help: { type: "boolean" }, matches: { type: "string" }, generations: { type: "string" },
   population: { type: "string" }, seed: { type: "string" }, size: { type: "string" }, out: { type: "string" },
   params: { type: "string" }, opponent: { type: "string" }, workers: { type: "string" },
+  model: { type: "string" }, "opponent-profile": { type: "string" },
 };
 
 // Search space. Traits are linear in [0, 1]. Weights are multipliers searched on a log scale.
@@ -124,8 +128,10 @@ async function readParams(path) {
 }
 
 /** Matches alternate sides so home advantage cancels. Candidate plays home on even match indices. */
-function matchTasks(candidate, opponent, seeds, size) {
-  return seeds.map((seed, index) => ({ seed, size, side: index % 2 === 0 ? "home" : "away", candidate, opponent }));
+function matchTasks(candidate, opponent, seeds, size, model) {
+  return seeds.map((seed, index) => ({
+    seed, size, side: index % 2 === 0 ? "home" : "away", candidate, opponent, model,
+  }));
 }
 
 function summarize(results) {
@@ -216,15 +222,18 @@ async function search(pool, values, size) {
 }
 
 async function compare(pool, values, size) {
-  if (!values.params) throw new Error("compare requires --params PATH");
-  const candidate = await readParams(values.params);
-  const opponent = values.opponent ? await readParams(values.opponent) : {};
+  if (!values.params && !values.model) throw new Error("compare requires --params PATH or --model PATH");
+  const candidate = values.model ? {} : await readParams(values.params);
+  const profile = values["opponent-profile"];
+  if (profile !== undefined && !Object.hasOwn(AI_PROFILES, profile)) throw new RangeError("--opponent-profile must be default or tuned");
+  const opponent = profile ? { ...AI_PROFILES[profile].config } : values.opponent ? await readParams(values.opponent) : {};
+  const opponentName = profile ?? values.opponent ?? "default baseline";
   const matches = integer(values.matches, "--matches", 200, 4);
   const seeds = Array.from({ length: matches }, (_, index) => 900_000_000 + integer(values.seed, "--seed", 1, 0) * 100_000 + index);
-  const results = await pool.run(matchTasks(candidate, opponent, seeds, size));
+  const results = await pool.run(matchTasks(candidate, opponent, seeds, size, values.model));
   const total = summarize(results);
   const side = (parity) => summarize(results.filter((_, index) => index % 2 === parity));
-  console.log(`Candidate vs ${values.opponent ?? "default baseline"}, ${matches} held-out matches (${size}v${size})`);
+  console.log(`${values.model ? `Trained policy ${values.model}` : "Candidate"} vs ${opponentName}, ${matches} held-out matches (${size}v${size})`);
   console.log(`  mean goal difference  ${f(total.meanDiff)} +/- ${f(1.96 * total.standardError)} (95% interval)`);
   console.log(`  as home ${f(side(0).meanDiff)}   as away ${f(side(1).meanDiff)}`);
   console.log(`  wins ${total.wins}  draws ${total.draws}  losses ${total.losses}`);

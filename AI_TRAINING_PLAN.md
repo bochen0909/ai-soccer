@@ -85,7 +85,9 @@ Training infrastructure
 - [x] stdio bridge (`scripts/env-server.mjs`) and Python client (`python/soccer_env.py`); no Gymnasium dependency, a vectorized client with masks and auto-reset
 - [x] Persistent worker pool: several Node processes, several environments each, batched stepping (about 2,500 to 3,000 steps per second on 12 cores)
 - [ ] Throughput target and profiling (the learner decides every tick, and cloning observations per tick is the main overhead)
-- [ ] Policy export and in-engine inference as a controller plugin (for example ONNX)
+- [x] Policy export and in-engine inference: `python/export_policy.py` writes exact float32 weights to `models/trained-5v5.json`; `NeuralTeamAI` (team AI "neural") runs them in the engine; a test pins its outputs to PyTorch's. In-game, 64 held-out matches: +1.20 ±0.67 against the default CPU and -0.11 ±0.69 against Hard. The browser app offers it as "CPU Trained" (5-a-side)
+- [ ] League training: keep fine-tuning against the default CPU, Hard and past versions of the trained policy (the env server can already take a `trained` opponent once the neural plugin is registered there)
+- [ ] Re-run imitation with more teacher diversity (default and tuned teachers, 11v11) and a bigger network if the policy plateaus
 
 ## RL results so far
 
@@ -151,3 +153,18 @@ Findings from the imitation work worth keeping:
 | Attack-frame observations | Lets one policy play either side |
 | Browser app can run human vs CPU and CPU vs CPU with Default or Hard profiles | Lets us watch and play against tuning results directly |
 | Target-based pass actions | Avoids learning continuous aim and power from scratch |
+
+## How to reproduce the trained player
+
+```
+npm run build
+node scripts/record-demos.mjs --matches 40 --out demos/tuned              # teacher decisions as training data
+python3 python/dagger.py --demos demos/tuned --name dagger2 --rounds 16 --rollout-steps 900
+python3 python/train_ppo.py --name ft1 --init runs/dagger2/latest.pt --lr 1e-4 --entropy 0.001 --clip 0.1 \
+  --value-warmup 10 --iterations 300 --eval-every 25 --eval-episodes 4
+python3 python/evaluate_checkpoint.py runs/ft1/latest.pt --matches 64       # held-out check in Python
+python3 python/export_policy.py runs/ft1/latest.pt models/trained-5v5.json --check test/fixtures/policy-check.json
+npm run tune -- compare --model models/trained-5v5.json --opponent-profile tuned --matches 64   # held-out check in the engine
+```
+
+Run each Python script from the `python/` folder (they import each other). Runs take about 5 to 15 minutes each on a 12-core laptop.

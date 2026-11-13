@@ -78,7 +78,7 @@ export class MatchSession {
       const control = new TeamControl(team, teamOptions[index], this.selected);
       // Separate deterministic seeds keep plugins independent of each other and the engine.
       const controllerSeed = (seed ^ (index === 0 ? 0x9e3779b9 : 0x85ebca6b)) >>> 0;
-      control.reset(this.registry, team, index as 0 | 1, controllerSeed, teamOptions[index], failures);
+      control.reset(this.registry, team, config.teams[1 - index], index as 0 | 1, controllerSeed, teamOptions[index], failures);
       return control;
     });
     this.humanTeam = this.teams.find(({ teamId }) => teamId === human?.teamId);

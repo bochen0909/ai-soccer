@@ -60,8 +60,14 @@ Team-level scalar, in `DEFAULT_REWARD`:
 
 `env.shapingScale` multiplies the two shaping terms. Anneal it toward 0 so the policy ends up optimizing goals only.
 
+## Teacher labels, imitation and export
+
+- `scripts/record-demos.mjs` records a baseline profile's decisions in this document's observation and action format. `intentToChoice` converts a controller's decision to `[move, sprint, act]`: movement snaps to the nearest of 8 directions, and a pass becomes "pass to slot k", using the named receiver or else the best-aligned legal teammate.
+- The env server's `teacher` option returns, for every state it reports, what a baseline profile would do there. That is what DAgger (`python/dagger.py`) uses to label the states the student visits.
+- `python/export_policy.py` writes a checkpoint to a JSON file of exact float32 weights, and `NeuralTeamAI` (team AI "neural", `src/controllers/neural.ts`) plays with it. A controller's `AIContext` includes `opponents` (the other roster in order), because the policy's input lists opponents in roster order.
+
 ## Not built yet
 
 - A process bridge (stdio or socket) for Python trainers, and a worker pool. One environment runs about 750 steps per second at 5v5 and 350 at 11v11 on one core.
 - Self-play: the opponent cannot yet be a second `external` team.
-- Learned policies as in-engine controllers (for example ONNX inference).
+- A stronger trained player: league training against several opponents, and 11-a-side.

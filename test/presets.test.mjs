@@ -55,3 +55,18 @@ test('the tuned profile beats the default profile from either side', () => {
   }
   assert.ok(difference > 0, `tuned goal difference ${difference}`);
 });
+
+test('the trained profile runs as a team through the same wiring the browser app uses', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { registerNeuralPolicy } = await import('../dist/index.js');
+  const weights = JSON.parse(readFileSync(new URL('../models/trained-5v5.json', import.meta.url), 'utf8'));
+  assert.equal(AI_PROFILES.trained.plugin, 'neural');
+  assert.equal(profileTeamOptions('trained').pluginId, 'neural');
+  assert.equal(profileSupports('trained', 5), true);
+  assert.equal(profileSupports('trained', 11), false);
+  const session = new MatchSession(registerNeuralPolicy(createDefaultAIRegistry(), weights));
+  assert.deepEqual(session.reset(createArcadeConfig(), 4, {
+    teams: { home: profileTeamOptions('trained'), away: profileTeamOptions('tuned') },
+  }), []);
+  for (let tick = 0; tick < 400; tick += 1) assert.deepEqual(session.step().controllerFailures, []);
+});

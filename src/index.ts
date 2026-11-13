@@ -9,6 +9,8 @@ export { createPlayerAbilities } from "./presets/players.js";
 export type { PlayerAbilityPreset } from "./presets/players.js";
 export * from "./controllers/contracts.js";
 export { TeamAIRegistry } from "./controllers/registry.js";
+export { decodeWeights, forward, NeuralTeamAI, registerNeuralPolicy } from "./controllers/neural.js";
+export type { Network, NeuralOptions, PolicyWeights } from "./controllers/neural.js";
 export { BaselineTeamAI, DEFAULT_WEIGHTS } from "./controllers/baseline.js";
 export type { Weights } from "./controllers/baseline.js";
 export * from "./session/contracts.js";

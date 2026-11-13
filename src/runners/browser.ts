@@ -4,7 +4,9 @@ import { isAIProfileId, profileSupports, profileTeamOptions } from "../presets/a
 import type { AIProfileId } from "../presets/ai.js";
 import { MatchAudio } from "../render/audio.js";
 import { PitchRenderer } from "../render/scene.js";
-import { MatchSession } from "../session/match-session.js";
+import { registerNeuralPolicy } from "../controllers/neural.js";
+import type { PolicyWeights } from "../controllers/neural.js";
+import { createDefaultAIRegistry, MatchSession } from "../session/match-session.js";
 import type { HumanInput, SessionSnapshot } from "../session/contracts.js";
 import { FixedStepClock } from "./fixed-step.js";
 import { KeyboardControls } from "./keyboard.js";
@@ -48,7 +50,19 @@ config.rules.directionalKickoff = true;
 const audio = new MatchAudio();
 const input = new KeyboardControls(surface, window, (detail) => showActionFeedback(detail, timing.frame().current.tick));
 let renderer = new PitchRenderer(pitch, config);
-const session = new MatchSession();
+const registry = createDefaultAIRegistry();
+let trainedReady = false;
+try {
+  // The trained policy is a 600 KB file. Without it the page still works, just without the Trained option.
+  const response = await fetch("/models/trained-5v5.json");
+  if (response.ok) {
+    registerNeuralPolicy(registry, (await response.json()) as PolicyWeights);
+    trainedReady = true;
+  }
+} catch (error) {
+  console.warn("Trained policy unavailable", error);
+}
+const session = new MatchSession(registry);
 const names = ["N. Kova", "M. Silva", "D. Reyes", "T. Moss", "A. Vega"];
 const fullNames = ["N. Kova", "M. Silva", "D. Reyes", "I. Okafor", "R. Malik", "T. Moss",
   "L. Costa", "S. Kim", "J. Mensah", "A. Vega", "E. Sato"];
@@ -80,7 +94,9 @@ function syncControlOptions(): void {
   const playersPerSide = config.teams[0].players.length;
   for (const select of [homeControl, awayControl]) {
     for (const option of Array.from(select.options)) {
-      if (isAIProfileId(option.value)) option.disabled = !profileSupports(option.value, playersPerSide);
+      if (isAIProfileId(option.value)) {
+        option.disabled = !profileSupports(option.value, playersPerSide) || (option.value === "trained" && !trainedReady);
+      }
     }
     if (select.selectedOptions[0]?.disabled) select.value = "default";
   }
