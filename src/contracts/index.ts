@@ -259,6 +259,7 @@ export interface TeamObservation extends RenderSnapshot {
   pitch: PitchConfig;
   ballConfig?: BallConfig;
   tuning?: MatchConfig["tuning"];
+  directionalKickoff?: boolean;
   events: readonly MatchEvent[];
 }
 

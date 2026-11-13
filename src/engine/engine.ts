@@ -126,7 +126,10 @@ export class SoccerEngine implements MatchEngine {
       throw new RangeError(`Unknown team ${teamId}`);
     }
     const { pitch, ball: ballConfig, tuning } = state.config;
-    return structuredClone({ ...this.view(state), teamId, pitch, ballConfig, tuning, events: state.events });
+    return structuredClone({
+      ...this.view(state), teamId, pitch, ballConfig, tuning,
+      directionalKickoff: state.config.rules.directionalKickoff, events: state.events,
+    });
   }
 
   step(frame: ActionFrame): TickResult {

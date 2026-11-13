@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createArcadeConfig, MatchSession, SoccerEngine } from "../dist/index.js";
+import { createArcadeConfig, createElevenAsideConfig, MatchSession, SoccerEngine } from "../dist/index.js";
 import { KeyboardControls } from "../dist/runners/keyboard.js";
 
 function setup() {
@@ -54,6 +54,55 @@ test("J plays kickoff back to a teammate and a held direction can aim forward", 
   press("KeyJ", "j");
   const forward = controls.sample(snapshot, config);
   assert.ok(forward.request.direction.x > 0);
+});
+
+test("the full match previews the kickoff receiver and hands over control on reception", () => {
+  const { controls, press } = setup();
+  const config = createElevenAsideConfig();
+  const session = new MatchSession();
+  session.reset(config, 17, { human: { teamId: "home", playerId: "home-9" } });
+  for (let tick = 0; tick < config.rules.restartPlacementTicks; tick += 1) session.step();
+  const snapshot = session.snapshot();
+  assert.equal(snapshot.players.length, 22);
+  assert.equal(snapshot.phase.takerId, "home-9");
+  const preview = controls.previewGroundPass(snapshot, config);
+  assert.ok(preview);
+  press("KeyJ", "j");
+  const command = controls.sample(snapshot, config);
+  assert.deepEqual(command.pass, preview);
+  session.step(command);
+  for (let tick = 0; tick < 200 && session.snapshot().selectedPlayerId !== preview.receiverId; tick += 1) {
+    session.step();
+  }
+  assert.equal(session.snapshot().selectedPlayerId, preview.receiverId);
+});
+
+test("an open teammate 35 m away can receive a full-match ground pass", () => {
+  const { controls, press } = setup();
+  const config = createElevenAsideConfig();
+  const passerId = "home-1";
+  const receiverId = "home-2";
+  const session = new MatchSession();
+  session.reset(config, 17, { human: { teamId: "home", playerId: passerId } }, {
+    version: 1, id: "long-ground-pass", period: 1, phase: { kind: "live" },
+    players: config.teams.flatMap((team, side) => team.players.map((player, index) => ({
+      playerId: player.id,
+      facingRad: side ? Math.PI : 0,
+      position: player.id === passerId ? { x: -16.5, y: 0 } : player.id === receiverId ? { x: 19, y: 0 }
+        : { x: side ? 42 : -35, y: -30 + 6 * index },
+    }))),
+    ball: {
+      position: { x: -16, y: 0, z: config.ball.radiusM },
+      velocity: { x: 0, y: 0, z: 0 },
+      control: { kind: "dribble", playerId: passerId }, lastTouchPlayerId: passerId,
+    },
+  });
+  const snapshot = session.snapshot();
+  assert.equal(controls.previewGroundPass(snapshot, config)?.receiverId, receiverId);
+  press("KeyJ", "j");
+  session.step(controls.sample(snapshot, config));
+  for (let tick = 0; tick < 250 && session.snapshot().selectedPlayerId !== receiverId; tick += 1) session.step();
+  assert.equal(session.snapshot().selectedPlayerId, receiverId);
 });
 
 test("a pass into empty space can roll to a stop before the touchline", () => {

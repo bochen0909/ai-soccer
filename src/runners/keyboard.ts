@@ -40,6 +40,7 @@ function passTarget(
   groundKick = false,
 ): PassTarget | undefined {
   const origin = snapshot.ball.position;
+  const fullSide = config.teams[0].players.length === 11;
   const needsClearLane = snapshot.phase.kind !== "live" &&
     !(snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff);
   let best: { pass: PassTarget; score: number } | undefined;
@@ -57,7 +58,8 @@ function passTarget(
       continue;
     }
     const alignment = heading.x * aim.x + heading.y * aim.y;
-    if (snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff && alignment <= 0) continue;
+    if (((snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff) ||
+        fullSide) && alignment <= 0) continue;
     let obstruction = 0;
     for (const opponent of snapshot.players) {
       if (opponent.teamId === player.teamId) continue;
@@ -68,7 +70,8 @@ function passTarget(
       const clearance = Math.abs(dx * heading.y - dy * heading.x);
       obstruction = Math.max(obstruction, Math.max(0, 1.3 - clearance));
     }
-    const score = alignment * 3.4 - range * 0.075 - obstruction * 0.9 -
+    const distancePenalty = groundKick && fullSide ? 0.045 : 0.075;
+    const score = alignment * 3.4 - range * distancePenalty - obstruction * 0.9 -
       (receiver.definition.role === "goalkeeper" ? 0.35 : 0);
     if (!best || score > best.score) best = { pass: { receiverId: receiver.playerId, target }, score };
   }
@@ -83,14 +86,18 @@ function kick(
   snapshot: SessionSnapshot, config: MatchConfig, player: Player, kind: "pass" | "loft", aim: Vec2,
 ): Pick<HumanInput, "request" | "pass"> {
   const { maxKickSpeedMps } = player.definition.abilities.physical;
+  const fullSide = config.teams[0].players.length === 11;
   const maxSpeed = maxKickSpeedMps * (kind === "pass" ? 0.55 : 0.75);
   const rollout = maxSpeed ** 2 / (2 * Math.max(0.4, config.ball.groundDecelerationMps2));
-  const maxDistance = kind === "pass" ? Math.min(25, rollout * 0.7) : Math.min(34, maxSpeed ** 2 / 12);
+  const maxDistance = kind === "pass" ? Math.min(fullSide ? 38 : 25, rollout * 0.7)
+    : Math.min(34, maxSpeed ** 2 / 12);
   const pass = passTarget(snapshot, player, config, aim, maxDistance, kind === "pass");
   const origin = snapshot.ball.position;
   const range = pass ? distance(origin, pass.target) : kind === "pass" ? 4 : 7;
   // Keep short passes controllable and give passes into empty space a short rollout.
-  const arrivalSpeed = pass ? Math.min(3.6, 2 + range * 0.075) : 1.8;
+  const shortPassArrival = Math.min(3.6, 2 + range * 0.075);
+  const longPassPace = fullSide ? clamp((range - 12) * 0.14, 0, 3.2) : 0;
+  const arrivalSpeed = pass ? shortPassArrival + longPassPace : 1.8;
   const heading = pass ? direction(origin, pass.target, aim) : aim;
   const fromPlayer = direction(player.position, origin, aim);
   const needsClearLane = snapshot.phase.kind !== "live" &&
@@ -173,6 +180,18 @@ function selectPlayer(snapshot: SessionSnapshot, player: Player, cycle: boolean)
     outfield.includes(player) ? player : outfield[0] ?? player);
 }
 
+function passAim(snapshot: SessionSnapshot, config: MatchConfig, movement: Vec2, attack: number): Vec2 {
+  if (movement.x !== 0 || movement.y !== 0) return movement;
+  return { x: snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff ? -attack : attack, y: 0 };
+}
+
+function canGroundKick(snapshot: SessionSnapshot, player: Player): boolean {
+  const { ball } = snapshot;
+  return (ball.control.kind === "free" || (ball.control.kind === "dribble" && ball.control.playerId === player.playerId)) &&
+    Math.hypot(ball.position.x - player.position.x, ball.position.y - player.position.y, ball.position.z) <=
+      player.definition.abilities.physical.reachM;
+}
+
 function keyFor(event: KeyboardEvent): Key | undefined {
   const code = event.code?.toLowerCase() ?? "";
   const character = code.startsWith("key") ? code.slice(3) : event.key.toLowerCase();
@@ -220,6 +239,26 @@ export class KeyboardControls {
     this.surface.removeEventListener("focusout", this.focusout);
   }
 
+  private movement(): Vec2 {
+    const held = new Set(this.held.values());
+    const x = Number(held.has("right")) - Number(held.has("left"));
+    const y = Number(held.has("down")) - Number(held.has("up"));
+    const length = Math.hypot(x, y);
+    return length > 0 ? { x: x / length, y: y / length } : neutral;
+  }
+
+  previewGroundPass(snapshot: SessionSnapshot, config: MatchConfig): PassTarget | undefined {
+    if (!this.hasMatchFocus()) return undefined;
+    const player = snapshot.players.find(({ playerId }) => playerId === snapshot.selectedPlayerId);
+    if (!player || player.action) return undefined;
+    const attack = snapshot.attackDirections[config.teams[0].id === player.teamId ? 0 : 1];
+    const aim = passAim(snapshot, config, this.movement(), attack);
+    if (snapshot.phase.kind !== "live") {
+      return restart(snapshot, config, player, { kind: "pass" }, aim).pass;
+    }
+    return canGroundKick(snapshot, player) ? kick(snapshot, config, player, "pass", aim).pass : undefined;
+  }
+
   sample(snapshot: SessionSnapshot, config: MatchConfig): HumanInput {
     if (!this.hasMatchFocus()) this.clear();
     const action = this.action;
@@ -227,12 +266,8 @@ export class KeyboardControls {
     this.action = undefined;
     this.selection = undefined;
 
-    const held = new Set(this.held.values());
-    const x = Number(held.has("right")) - Number(held.has("left"));
-    const y = Number(held.has("down")) - Number(held.has("up"));
-    const length = Math.hypot(x, y);
-    const movement = length > 0 ? { x: x / length, y: y / length } : neutral;
-    const input: HumanInput = { movement, sprint: held.has("sprint") };
+    const movement = this.movement();
+    const input: HumanInput = { movement, sprint: [...this.held.values()].includes("sprint") };
     const selected = snapshot.players.find(({ playerId }) => playerId === snapshot.selectedPlayerId);
     if (!selected) return {};
 
@@ -246,8 +281,7 @@ export class KeyboardControls {
 
     const attack = snapshot.attackDirections[config.teams[0].id === player.teamId ? 0 : 1];
     const forward = { x: attack, y: 0 };
-    const aim = length > 0 ? movement : snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff
-      ? { x: -attack, y: 0 } : forward;
+    const aim = passAim(snapshot, config, movement, attack);
     if (snapshot.phase.kind !== "live") {
       const restartInput = restart(snapshot, config, player, action, aim);
       if (!restartInput.request && action.kind !== "defend") {
@@ -282,9 +316,7 @@ export class KeyboardControls {
     }
 
     const canKick = ball.control.kind === "free" || ball.control.playerId === player.playerId;
-    const ballDistance = Math.hypot(ball.position.x - player.position.x,
-      ball.position.y - player.position.y, ball.position.z);
-    if (!canKick || ballDistance > player.definition.abilities.physical.reachM) {
+    if (!canGroundKick(snapshot, player)) {
       this.feedback(canKick ? "Ball out of reach" : "Selected player doesn’t have the ball");
       return input;
     }

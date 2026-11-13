@@ -27,6 +27,7 @@ interface Tactics {
   teammates: readonly PlayerState[];
   opponents: readonly PlayerState[];
   traits: Traits;
+  fullSide: boolean;
 }
 
 const defaults: Traits = { aggression: 0.55, riskTolerance: 0.5, awareness: 0.65 };
@@ -97,7 +98,10 @@ function passingOption(tactics: Tactics, passer: PlayerState, origin: Vec2, maxR
     // During setup, avoid kicking back through the stationary restart taker.
     const ballFromTaker = difference(passer.position, origin);
     const aim = direction(origin, target, tactics.attack);
-    if (tactics.world.phase.kind !== "live" && ballFromTaker.x * aim.x + ballFromTaker.y * aim.y < -0.05) continue;
+    const phase = tactics.world.phase.kind;
+    const canPassBack = tactics.fullSide && phase === "kickoffSetup" && tactics.world.directionalKickoff;
+    if (phase !== "live" && !canPassBack &&
+        ballFromTaker.x * aim.x + ballFromTaker.y * aim.y < -0.05) continue;
     const space = nearestDistance(target, tactics.opponents, 5);
     const lane = laneClearance(origin, target, tactics.opponents);
     const progress = tactics.attack * (target.x - origin.x);
@@ -168,7 +172,7 @@ function carrying(tactics: Tactics, player: PlayerState): PlayerIntent {
   }
 
   const passSpeed = player.definition.abilities.physical.maxKickSpeedMps * 0.55;
-  const pass = passingOption(tactics, player, origin, Math.min(19, passSpeed ** 2 * 0.23));
+  const pass = passingOption(tactics, player, origin, Math.min(tactics.fullSide ? 26 : 19, passSpeed ** 2 * 0.23));
   const forwardLane = laneClearance(origin, target, tactics.opponents);
   if (pass && (pressure < 2.4 || forwardLane < 0.9) && pass.score > 0.6 + tactics.traits.riskTolerance) {
     return {
@@ -217,6 +221,19 @@ function interception(tactics: Tactics, player: PlayerState): { target: Vec2; et
 function formation(tactics: Tactics, player: PlayerState, mode: Mode): Vec2 {
   const { pitch, ball } = tactics.world;
   const { x, y } = player.definition.formation;
+  if (tactics.fullSide) {
+    const ballX = ball.position.x * tactics.attack;
+    const defensiveLine = x <= -pitch.lengthM * 0.28;
+    // Keep the back four between the ball and goal while advancing the midfield in possession.
+    const base = defensiveLine && mode !== "attack" ? Math.min(x, ballX - 4) : x;
+    const advance = mode === "attack" ? (defensiveLine ? 7 : 18) : 0;
+    const shift = mode === "attack" ? 0.42 : defensiveLine ? 0.17 : 0.36;
+    const lineShift = defensiveLine && mode !== "attack" ? Math.max(0, ballX * shift) : ballX * shift;
+    return onPitch(tactics, {
+      x: (base + lineShift + advance) * tactics.attack,
+      y: y * tactics.attack + ball.position.y * (defensiveLine ? 0.17 : 0.24),
+    });
+  }
   const shift = mode === "attack" ? 0.49 : mode === "defend" ? 0.33 : 0.36;
   const run = mode === "attack" ? Math.max(0, 1 + 2 * x / pitch.lengthM) * pitch.lengthM * 0.21 : 0;
   return onPitch(tactics, {
@@ -295,13 +312,33 @@ function goalkeeper(tactics: Tactics, player: PlayerState): PlayerIntent {
 
 function passingRun(tactics: Tactics, player: PlayerState, intention: PassIntention): PlayerIntent {
   const target = intention.status === "inFlight" ? interception(tactics, player).target : intention.target;
+  if (tactics.fullSide && intention.status === "inFlight") {
+    // Hold the receiving lane when the pass is coming to us. Closing it at a sprint
+    // adds our running speed to the impact and makes a routine first touch harder.
+    const { position, velocity } = tactics.world.ball;
+    const speed = length(velocity);
+    const ballRadius = tactics.world.ballConfig?.radiusM ?? 0.11;
+    if (speed > 4.5 && position.z <= ballRadius + 1e-6 && Math.abs(velocity.z) < 1e-6) {
+      const offset = difference(position, player.position);
+      const along = (offset.x * velocity.x + offset.y * velocity.y) / speed;
+      const across = (offset.x * velocity.y - offset.y * velocity.x) / speed;
+      const friction = tactics.world.ballConfig?.groundDecelerationMps2 ?? 1.6;
+      if (along > 0 && speed ** 2 - along * 2 * friction > 4.5 ** 2) {
+        const lane = {
+          x: player.position.x - (across * velocity.y + 0.3 * velocity.x) / speed,
+          y: player.position.y + (across * velocity.x - 0.3 * velocity.y) / speed,
+        };
+        return move(player, onPitch(tactics, lane));
+      }
+    }
+  }
   return move(player, target, distance(player.position, target) > 4);
 }
 
 /** Deterministic formation tactics with one pressing or chasing outfield player. */
 export class BaselineTeamAI implements TeamAI {
   readonly id = "baseline";
-  readonly version = "2";
+  readonly version = "4";
   private teamIndex: 0 | 1 = 0;
   private traits: Traits = defaults;
   private chaser: PlayerId | undefined;
@@ -330,6 +367,7 @@ export class BaselineTeamAI implements TeamAI {
     const tactics: Tactics = {
       world: observation, attack: observation.attackDirections[this.teamIndex], teammates,
       opponents: players.filter((player) => player.teamId !== teamId), traits: this.traits,
+      fullSide: teammates.length === 11,
     };
     if (observation.phase.kind !== "live") {
       this.dispose();
@@ -342,7 +380,13 @@ export class BaselineTeamAI implements TeamAI {
     const mode: Mode = intention ? "attack" : !owner ? "loose" : owner.teamId === teamId ? "attack" : "defend";
     const outfield = controlled.filter((player) => player.definition.role === "outfield");
     const candidates = mode !== "attack" && ball.control.kind !== "keeperHeld"
-      ? outfield.map((player) => ({ player, ...interception(tactics, player) })) : [];
+      ? outfield.map((player) => {
+        const intercept = interception(tactics, player);
+        const centerBack = tactics.fullSide && player.definition.formation.x <= -observation.pitch.lengthM * 0.28 &&
+          Math.abs(player.definition.formation.y) < observation.pitch.widthM * 0.18;
+        const leavingLine = centerBack && intercept.target.x * tactics.attack > -observation.pitch.lengthM * 0.24;
+        return { player, ...intercept, eta: intercept.eta + (leavingLine ? 0.85 : 0) };
+      }) : [];
     const previous = mode === this.mode ? candidates.find(({ player }) => player.playerId === this.chaser) : undefined;
     const fastest = candidates.reduce<typeof candidates[number] | undefined>((best, candidate) =>
       !best || candidate.eta < best.eta ? candidate : best, undefined);
@@ -380,9 +424,10 @@ export class BaselineTeamAI implements TeamAI {
       const anchor = formation(tactics, player, mode);
       const mark = markerById.get(player.playerId);
       if (!mark) return move(player, anchor);
+      const markWeight = tactics.fullSide ? 0.28 : 0.52;
       return move(player, onPitch(tactics, {
-        x: 0.48 * anchor.x + 0.52 * (mark.position.x - 1.5 * tactics.attack),
-        y: 0.48 * anchor.y + 0.52 * mark.position.y,
+        x: (1 - markWeight) * anchor.x + markWeight * (mark.position.x - 1.5 * tactics.attack),
+        y: (1 - markWeight) * anchor.y + markWeight * mark.position.y,
       }));
     });
   }

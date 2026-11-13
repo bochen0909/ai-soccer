@@ -22,8 +22,11 @@
 
   <main class="match">
     <div class="match-heading">
-      <h1>Quick Match</h1>
-      <p>5-a-side <span aria-hidden="true">/</span> 2 min</p>
+      <h1 id="match-title">Quick Match</h1>
+      <select id="match-format" class="tool" aria-label="Match format">
+        <option value="quick">5-a-side · 2 min</option>
+        <option value="full">11-a-side · 6 min</option>
+      </select>
     </div>
     <section class="stadium" id="surface" tabindex="0" aria-label="Football pitch" aria-describedby="controls">
       <canvas id="pitch" aria-hidden="true"></canvas>

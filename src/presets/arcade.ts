@@ -1,14 +1,23 @@
-import type { MatchConfig, PlayerDefinition, TeamDefinition } from "../contracts/index.js";
+import type { MatchConfig, PlayerDefinition, TeamDefinition, Vec2 } from "../contracts/index.js";
 import { createPlayerAbilities } from "./players.js";
 
-function team(id: string): TeamDefinition {
-  const positions = [
-    { x: -27, y: 0 },
-    { x: -18, y: -9 },
-    { x: -18, y: 9 },
-    { x: -10, y: 0 },
-    { x: -5, y: 4 },
-  ];
+const quickFormation = [
+  { x: -27, y: 0 },
+  { x: -18, y: -9 },
+  { x: -18, y: 9 },
+  { x: -10, y: 0 },
+  { x: -5, y: 4 },
+];
+
+// 4–3–3, in metres from midfield, for a team attacking toward positive x.
+const fullSizeFormation = [
+  { x: -49, y: 0 },
+  { x: -32, y: -23 }, { x: -37, y: -8 }, { x: -37, y: 8 }, { x: -32, y: 23 },
+  { x: -18, y: -13 }, { x: -13, y: 0 }, { x: -18, y: 13 },
+  { x: -6, y: -21 }, { x: -1, y: 0 }, { x: -6, y: 21 },
+];
+
+function team(id: string, positions: readonly Vec2[]): TeamDefinition {
   const players = positions.map((formation, index): PlayerDefinition => {
     const keeper = index === 0;
     const abilities = createPlayerAbilities();
@@ -16,7 +25,7 @@ function team(id: string): TeamDefinition {
     return {
       id: keeper ? `${id}-keeper` : `${id}-${index}`,
       role: keeper ? "goalkeeper" : "outfield",
-      formation,
+      formation: { ...formation },
       bodyHeightM: 1.78,
       radiusM: 0.32,
       massKg: 72,
@@ -51,7 +60,7 @@ export function createArcadeConfig(): MatchConfig {
       contactRestitution: 0.65,
       maxSpeedMps: 45,
     },
-    teams: [team("home"), team("away")],
+    teams: [team("home", quickFormation), team("away", quickFormation)],
     periodTicks: [3600, 3600],
     firstKickoffTeamId: "home",
     rules: {
@@ -64,5 +73,28 @@ export function createArcadeConfig(): MatchConfig {
       restartExclusionM: 3,
     },
     tuning: { version: 2 },
+  };
+}
+
+/** Returns an editable eleven-a-side match with three-minute halves. */
+export function createElevenAsideConfig(): MatchConfig {
+  const config = createArcadeConfig();
+  return {
+    ...config,
+    pitch: {
+      ...config.pitch,
+      lengthM: 105,
+      widthM: 68,
+      goalWidthM: 7.32,
+      goalHeightM: 2.44,
+      goalAreaDepthM: 5.5,
+      goalAreaWidthM: 18.32,
+      keeperAreaDepthM: 16.5,
+      keeperAreaWidthM: 40.32,
+      centerCircleRadiusM: 9.15,
+    },
+    teams: [team("home", fullSizeFormation), team("away", fullSizeFormation)],
+    periodTicks: [10800, 10800],
+    rules: { ...config.rules, restartExclusionM: 9.15, directionalKickoff: true },
   };
 }

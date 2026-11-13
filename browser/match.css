@@ -15,7 +15,7 @@
 body { margin: 0; min-width: 320px; }
 [hidden] { display: none !important; }
 button { font: inherit; cursor: pointer; }
-button:focus-visible, .stadium:focus-visible { outline: 2px solid var(--mint); outline-offset: 4px; }
+button:focus-visible, select:focus-visible, .stadium:focus-visible { outline: 2px solid var(--mint); outline-offset: 4px; }
 .topbar { background: #0e1621; border-bottom: 1px solid #202c39; }
 .topbar-inner {
   max-width: 1392px; margin: auto; min-height: 68px; padding: 0 36px; gap: 16px;
@@ -42,12 +42,11 @@ button:focus-visible, .stadium:focus-visible { outline: 2px solid var(--mint); o
 .pause { border-color: #4b624e; color: var(--mint); }
 .match { width: min(1320px, calc(100% - 72px)); margin: 0 auto 32px; }
 .match-heading {
-  display: flex; align-items: baseline; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
   margin: 28px 0 12px;
 }
 h1 { margin: 0; font-size: clamp(24px, 3vw, 34px); font-weight: 800; letter-spacing: -.048em; }
-.match-heading p { margin: 0; color: var(--muted); font-size: 13px; font-weight: 650; white-space: nowrap; }
-.match-heading p span { color: #627485; padding: 0 5px; }
+.match-heading select { font: inherit; font-size: 13px; color-scheme: dark; cursor: pointer; }
 .stadium {
   position: relative; isolation: isolate; width: 100%; aspect-ratio: 2.09; min-height: 390px;
   border: 1px solid #2c3d46; border-radius: 12px; overflow: hidden;

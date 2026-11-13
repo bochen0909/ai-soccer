@@ -123,7 +123,7 @@ export class PitchRenderer {
       previous.ball.position.z <= groundHeight && current.ball.position.z <= groundHeight;
   }
 
-  draw(previous: SessionSnapshot, current: SessionSnapshot, alpha: number): void {
+  draw(previous: SessionSnapshot, current: SessionSnapshot, alpha: number, receiverId?: string): void {
     if (!this.resize()) return;
     const ctx = this.context;
     ctx.drawImage(this.background, 0, 0, this.width, this.height);
@@ -150,6 +150,16 @@ export class PitchRenderer {
     this.drawBallShadow(ball);
     const selected = players.find(({ playerId }) => playerId === current.selectedPlayerId);
     if (selected) this.drawSelection(selected, time);
+    const receiver = players.find(({ playerId }) => playerId === receiverId);
+    if (receiver) {
+      const center = this.project(receiver.position.x, receiver.position.y);
+      const radius = Math.max(6, this.scale * 0.6);
+      ctx.beginPath();
+      ctx.ellipse(center.x, center.y, radius, radius * 0.62, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = "#d8ffb1";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
     const { control } = current.ball;
     if (control.kind !== "free") {
       const holder = players.find(({ playerId }) => playerId === control.playerId);
@@ -297,6 +307,7 @@ export class PitchRenderer {
       });
     marking(circle(0, 0, pitch.centerCircleRadiusM, 0, Math.PI * 2, 50), true);
     ellipse(ctx, this.project(0, 0), weight * 1.4, weight, white);
+    const fullSize = this.config.teams[0].players.length === 11;
     for (const side of [-1, 1]) {
       const box = (depth: number, width: number) => {
         const inside = side * (x - depth);
@@ -305,11 +316,19 @@ export class PitchRenderer {
       };
       box(pitch.keeperAreaDepthM, pitch.keeperAreaWidthM);
       box(pitch.goalAreaDepthM, pitch.goalAreaWidthM);
-      ellipse(ctx, this.project(side * (x - pitch.keeperAreaDepthM * 0.76), 0), weight, weight * 0.7, white);
+      const spotDepth = fullSize ? 11 : pitch.keeperAreaDepthM * 0.76;
+      const spotX = side * (x - spotDepth);
+      ellipse(ctx, this.project(spotX, 0), weight, weight * 0.7, white);
+      if (fullSize) {
+        const angle = Math.acos(Math.max(-1, Math.min(1,
+          (pitch.keeperAreaDepthM - spotDepth) / pitch.centerCircleRadiusM)));
+        const centerAngle = side === 1 ? Math.PI : 0;
+        marking(circle(spotX, 0, pitch.centerCircleRadiusM, centerAngle - angle, centerAngle + angle, 24));
+      }
       for (const sideline of [-1, 1]) {
         const begin = side === 1 ? (sideline === 1 ? Math.PI : Math.PI / 2)
           : (sideline === 1 ? -Math.PI / 2 : 0);
-        marking(circle(side * x, sideline * y, 0.85, begin, begin + Math.PI / 2, 10));
+        marking(circle(side * x, sideline * y, fullSize ? 1 : 0.85, begin, begin + Math.PI / 2, 10));
       }
     }
   }
@@ -365,7 +384,7 @@ export class PitchRenderer {
     ctx.lineWidth = 1.4;
     ctx.stroke();
 
-    const head = this.project(x, y, player.definition.bodyHeightM + 0.43);
+    const head = this.project(x, y, this.playerHeight(player) + 0.43);
     const markerY = head.y + 1.3 * Math.sin(time * 4);
     const size = Math.max(3.5, this.scale * 0.28);
     polygon(ctx, [
@@ -378,14 +397,19 @@ export class PitchRenderer {
     ], "#ffbb84");
   }
 
+  private playerHeight(player: PlayerState): number {
+    const scale = this.config.teams[0].players.length === 11 ? Math.max(1, 5.6 / this.scale) : 1;
+    return player.definition.bodyHeightM * scale;
+  }
+
   private drawPlayer(player: ViewPlayer, time: number): void {
     const ctx = this.context;
     const teamIndex = Number(player.teamId !== this.config.teams[0].id);
     const kit = player.definition.role === "goalkeeper" ? keeperKits[teamIndex] : teamIndex === 0 ? homeKit : awayKit;
     const hash = Array.from(player.playerId).reduce((sum, char) => sum + char.charCodeAt(0), 0);
     const skin = skinColors[hash % skinColors.length];
-    const height = player.definition.bodyHeightM;
-    const width = player.definition.radiusM;
+    const height = this.playerHeight(player);
+    const width = player.definition.radiusM * height / player.definition.bodyHeightM;
     const { x, y } = player.position;
     const facing = player.facingRad;
     const front = { x: Math.cos(facing), y: Math.sin(facing) };
