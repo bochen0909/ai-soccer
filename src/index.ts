@@ -10,3 +10,5 @@ export { TeamAIRegistry } from "./controllers/registry.js";
 export { BaselineTeamAI } from "./controllers/baseline.js";
 export * from "./session/contracts.js";
 export { MatchSession, createDefaultAIRegistry } from "./session/match-session.js";
+export * from "./runners/headless.js";
+export * from "./runners/replay.js";

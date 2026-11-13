@@ -362,7 +362,7 @@ The browser runner maintains an accumulator using elapsed wall time and calls th
 
 ## Reproducibility and replay
 
-The replay record contains engine and contract versions, resolved match and tuning configuration, resolved initial scenario, initial seed, and the normalized action frame applied at each tick. Record resulting commands after controller arbitration so playback can reproduce the match independently of AI inference timing. Rule-generated actions are reproduced by the engine and are identified as rule-generated in its events.
+The replay record contains engine and contract versions, resolved match and tuning configuration, the authored scenario when supplied, the resolved initial state, and the initial seed. It records the action frames submitted after controller arbitration, so playback passes them through the same engine normalization and can reproduce the match without running the AI. Rule-generated actions are reproduced by the engine and are identified as rule-generated in its events.
 
 Use stable player ordering, explicit phase transitions, and a defined seeded generator. The initial determinism target is matching state hashes for the same engine build and runtime. Browser-to-Node equivalence is a verification target. Cross-runtime floating-point differences need measurement before claiming portable exact replay.
 
@@ -424,9 +424,25 @@ Validate a reset fully before replacing an existing match. On failure, throw a s
 
 Scenario generation, including randomized positions, runs outside the engine and records its resolved output and generation seed. Repeating the same resolved scenario, engine seed, and action frames must reproduce the same state hashes. Situations requiring an action already in progress are constructed by stepping a short recorded setup sequence. Full mid-action checkpoint restoration belongs to the future checkpoint interface.
 
+## Headless evaluation
+
+The headless runner supports complete AI-versus-AI matches, repeated seeded scenarios through `ScenarioDefinition`, and fixed tick budgets. Run it from the repository with Node and the project dependencies installed.
+
+```sh
+npm run --silent evaluate -- match --seed 17 --replay match-17.json
+npm run --silent evaluate -- verify match-17.json
+npm run --silent evaluate -- benchmark --seed 17 --matches 5 --warmup 1
+```
+
+`match` and `benchmark` accept `--config`, `--scenario`, and `--teams` JSON paths and a `--max-ticks` budget. The default budget is 120,000 simulation ticks per match. The CLI ships with the baseline AI. The `evaluateMatch` and `benchmarkMatches` TypeScript functions also accept a custom `TeamAIRegistry` and JSON-compatible plugin configuration.
+
+An evaluation records configuration, controller versions and seeds, final score, and the final state hash. A replay also records each submitted frame, and verification checks the initial state, tick sequence, and final result. Replays use the same engine version and runtime for exact comparisons. Controller failures invalidate the evaluation and identify the affected team and tick.
+
+Benchmarks run fresh matches serially after warmup. The report includes engine ticks per second, completed matches per second, time spent in simulation and controller decisions, remaining coordinator overhead, and setup and reporting time. It reports tick-limited matches separately, with their ticks included in throughput. The CLI adds machine and runtime information and a process memory sample after the benchmark. Timings exclude warmup and replay recording and file I/O.
+
 ## Future headless training
 
-The headless runner supports complete AI-versus-AI matches, repeated seeded scenarios through `ScenarioDefinition`, and fixed tick budgets. The future training adapter exposes reset and batched stepping to a trainer.
+The future training adapter exposes reset and batched stepping to a trainer.
 
 One policy transition advances a configurable number of physics ticks, initially six. It submits a one-time request at the first tick and holds movement intent through the remaining ticks. It returns the observation after the final tick, accumulated reward, elapsed tick count, and completion flags. Match completion ends the transition early. Engine match completion maps to termination, while an external rollout time limit maps to truncation.
 
