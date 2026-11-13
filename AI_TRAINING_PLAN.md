@@ -98,6 +98,8 @@ Everything below used the PPO trainer (`python/train_ppo.py`) with one shared ne
 | attack1 | 2v1 attack drill, started from the shooting policy, 250 iterations | 0 to 4% scoring throughout. A scripted run-and-shoot policy scores 0 to 5%, so the drill can only be solved by passing or dribbling past the defender, and the reward arrives only after a whole pass, run and shot line up |
 
 | pass1 | Pass drill (defender right in front of the carrier, open runner near goal), pass bonus 0.3, started from shoot1, 250 iterations | Learned a passing play: scoring rose from about 3% to 25 to 33% in evaluation (20 to 30% in training). A scripted pass-then-shoot policy scores about 2.5% there, and a solo run-and-shoot policy 1% |
+| attack2 | 2v1 attack drill from pass1 (pass bonus 0.3), 250 iterations | Learned: 15 to 30% scoring in evaluation (the same drill from the shooting policy alone stayed at 0 to 4%) |
+| full1 | Full 5v5 matches against the default CPU, started from attack2, 300 iterations | No gain. Evaluation goal difference -4 to -10 against the default CPU (mostly -6 to -7) and -11 to -14 against Hard, about the same as from scratch. The attacking skills from the drills did not carry over, probably because drills start in open play with the ball and never practise kickoffs, restarts or defending |
 
 What this tells us:
 - The pipeline works end to end: environment, masks, bridge, trainer, drills and evaluation.
@@ -105,7 +107,9 @@ What this tells us:
 - The default keeper almost always stops centre shots and often misses corner shots. Corner placement is the main skill the shooting drill taught.
 
 Next, in the order I'd try them:
-1. **Easier attack drill ladder.** Start with the defender absent and a pass to the runner required, then add the defender. Add a pass-completion bonus, such as a reward when a pass reaches a teammate who then has a shot.
+1. **Imitation first (recommended).** Record the tuned CPU's decisions as (observation, action) pairs, behavior-clone a policy from them, then fine-tune with RL. This gives RL a team that already defends and holds the ball. The conversion from the baseline's world-space decisions to the policy's discrete actions is approximate (8 move directions, pass to slot k).
+1b. **Hybrid control.** Let the baseline AI play the goalkeeper and restarts and let the policy control only outfield players in open play.
+1c. **Mixed training.** Alternate drill episodes with full matches in one run, so attacking skills don't replace defending.
 2. **Longer and larger runs** once a drill moves, with more parallel environments, and a tuned entropy coefficient.
 3. **Reward shaping for full matches:** shots on target, passes received, and tackles won, annealed with `shapingScale`.
 4. **Imitation start:** behavior-clone the tuned CPU's decisions (hard to beat as a teacher, since it wins 297 of 300 against the default) and then fine-tune with RL.
