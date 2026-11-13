@@ -254,6 +254,9 @@ function launch(
   }
   if (setup) {
     // Setup holds the ball at the restart spot until the taker makes contact.
+    if (state.phase.kind === "kickoffSetup" && state.config.rules.directionalKickoff) {
+      openKickoffLane(state, player, direction);
+    }
     player.facingRad = Math.atan2(direction.y, direction.x);
     state.phase = { kind: "live" };
   }
@@ -273,6 +276,30 @@ function launch(
     outcome: request.kind === "kick" ? "kicked" : request.kind === "throwIn" ? "thrown" : "released",
     position: { ...state.ball.position },
   });
+}
+
+function openKickoffLane(state: EngineState, player: PlayerState, direction: Vec2): void {
+  const { position } = state.ball;
+  const ballRadius = state.config.ball.radiusM;
+  const velocity = { ...direction, z: 0 };
+  const clearance = player.definition.radiusM + ballRadius + 0.05;
+  const blocked = (candidate: PlayerState): boolean => Boolean(
+    sweepCapsule(position, velocity, ballRadius, playerCapsule(candidate), 2 * clearance),
+  );
+  if (!blocked(player)) return;
+
+  // The taker steps beside the ball for a backpass, keeping the ball on the spot.
+  const side = direction.y > 0 ? -1 : 1;
+  for (const sign of [side, -side]) {
+    const next = { x: player.position.x, y: position.y + sign * clearance };
+    if (Math.abs(next.y) + player.definition.radiusM > state.config.pitch.widthM / 2) continue;
+    if (blocked({ ...player, position: next })) continue;
+    if (state.players.some((other) => other !== player &&
+        Math.hypot(other.position.x - next.x, other.position.y - next.y) <
+          other.definition.radiusM + player.definition.radiusM)) continue;
+    player.position = next;
+    return;
+  }
 }
 
 function enterRecovery(

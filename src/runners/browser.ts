@@ -1,4 +1,4 @@
-import type { MatchEvent, MatchPhase } from "../contracts/index.js";
+import type { ActionKey, MatchEvent, MatchPhase } from "../contracts/index.js";
 import { createArcadeConfig } from "../presets/arcade.js";
 import { MatchAudio } from "../render/audio.js";
 import { PitchRenderer } from "../render/scene.js";
@@ -24,6 +24,7 @@ const scoreboard = [element("home-score"), element("away-score")];
 const periodLabel = element("period");
 const clockLabel = element("clock");
 const phaseLabel = element("phase");
+const attackLabel = element("attack-direction");
 const message = element("game-message");
 const playerNumber = element("player-number");
 const playerName = element("player-name");
@@ -32,8 +33,9 @@ const shotMeter = element("shot-meter");
 const shotPower = element("shot-power");
 
 const config = createArcadeConfig();
+config.rules.directionalKickoff = true;
 const audio = new MatchAudio();
-const input = new KeyboardControls(surface);
+const input = new KeyboardControls(surface, window, (detail) => showActionFeedback(detail, timing.frame().current.tick));
 const renderer = new PitchRenderer(element<HTMLCanvasElement>("pitch"), config);
 const session = new MatchSession();
 const players = new Map(config.teams[0].players.map(({ id }, index) => [id, index]));
@@ -48,6 +50,19 @@ let mode: Mode = "ready";
 let sound = true;
 let matchMessage = "";
 let messageUntil = 0;
+let actionMessage = "";
+let actionMessageUntil = 0;
+let humanAction: ActionKey | undefined;
+
+function isHumanAction(action: ActionKey): boolean {
+  return action.source === "controller" && humanAction?.playerId === action.playerId &&
+    humanAction.requestId === action.requestId;
+}
+
+function showActionFeedback(detail: string, tick: number): void {
+  actionMessage = detail;
+  actionMessageUntil = tick + 78;
+}
 
 function showGate(title: string, detail: string, action: string): void {
   gateTitle.textContent = title;
@@ -72,6 +87,8 @@ function restart(): void {
   timing.align(session.snapshot());
   matchMessage = "";
   messageUntil = 0;
+  actionMessageUntil = 0;
+  humanAction = undefined;
   start();
 }
 
@@ -102,6 +119,8 @@ function receive(events: readonly MatchEvent[]): void {
     } else if (event.kind === "actionContact" && (event.outcome === "caught" || event.outcome === "parried")) {
       matchMessage = event.outcome === "caught" ? "Keeper holds it" : "Keeper parries";
       messageUntil = event.tick + 48;
+    } else if (event.kind === "actionContact" && event.outcome === "missed" && isHumanAction(event.action)) {
+      showActionFeedback("Missed the ball", event.tick);
     }
   }
 }
@@ -123,10 +142,12 @@ function matchHint(snapshot: SessionSnapshot): string {
   if (phase.kind === "kickoffSetup" || phase.kind === "restartSetup") {
     if (phase.teamId !== human.teamId) return `${phaseText(phase)} · Tidal FC`;
     if (snapshot.tick < phase.readyTick) return `${phaseText(phase)} · Ember FC`;
-    if (selectedPlayerId === phase.takerId) return "Press J to put the ball in play";
+    if (selectedPlayerId === phase.takerId) return phase.kind === "kickoffSetup"
+      ? "J to kick off · Hold a direction to aim" : "Press J to put the ball in play";
     return "Press Q to select the taker";
   }
   if (phase.kind === "halftime") return "Half time · Teams switch ends";
+  if (snapshot.tick < actionMessageUntil) return actionMessage;
   if (ball.control.kind === "keeperHeld" && ball.control.playerId === selectedPlayerId) {
     return "J to roll · L to throw";
   }
@@ -141,6 +162,7 @@ function paintHud(snapshot: SessionSnapshot): void {
   const elapsed = Math.floor(elapsedTicks / 60);
   clockLabel.textContent = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
   phaseLabel.textContent = phaseText(snapshot.phase).toUpperCase();
+  attackLabel.textContent = snapshot.attackDirections[0] === 1 ? "Attack →" : "← Attack";
   const selected = snapshot.players.find(({ playerId }) => playerId === snapshot.selectedPlayerId);
   const index = selected ? players.get(selected.playerId) : undefined;
   playerNumber.textContent = index === undefined ? "—" : String(index === 0 ? 1 : index + 6);
@@ -158,9 +180,27 @@ function draw(now: number): void {
   if (mode === "playing") {
     try {
       frame = timing.advance(now, () => {
-        const result = session.step(input.sample(timing.frame().current, config));
+        const command = input.sample(timing.frame().current, config);
+        const result = session.step(command);
         const snapshot = session.snapshot();
+        if (command.request && snapshot.selectedPlayerId) {
+          const playerId = snapshot.selectedPlayerId;
+          const submitted = result.frame.actions.find((action) => action.playerId === playerId)?.request;
+          if (submitted) {
+            humanAction = { source: "controller", playerId, requestId: submitted.id };
+            actionMessageUntil = 0;
+          }
+        }
         receive(result.events);
+        const actionResult = result.actionResults.find(({ action, status }) => isHumanAction(action) && status !== "accepted");
+        if (actionResult?.status === "rejected") {
+          const detail = actionResult.reason === "busy" ? "Player is still finishing an action" :
+            actionResult.reason === "ballUnavailable" ? "Ball unavailable for that action" : "Action unavailable right now";
+          showActionFeedback(detail, snapshot.tick);
+        } else if (actionResult?.status === "interrupted" && actionResult.reason === "ballUnavailable") {
+          showActionFeedback("Lost the ball before contact", snapshot.tick);
+        }
+        if (actionResult) humanAction = undefined;
         const placed = result.events.some((event) => event.kind === "phaseChanged" &&
           (event.phase.kind === "restartSetup" || event.phase.kind === "kickoffSetup"));
         return { snapshot, align: placed, finished: result.status === "finished" };

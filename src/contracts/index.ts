@@ -78,6 +78,7 @@ export interface BallConfig {
 
 export interface MatchRules {
   version: 1;
+  directionalKickoff?: boolean;
   restartPlacementTicks: number;
   restartInputTicks: number;
   goalPauseTicks: number;

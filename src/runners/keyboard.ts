@@ -40,6 +40,8 @@ function passTarget(
   groundKick = false,
 ): PassTarget | undefined {
   const origin = snapshot.ball.position;
+  const needsClearLane = snapshot.phase.kind !== "live" &&
+    !(snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff);
   let best: { pass: PassTarget; score: number } | undefined;
   for (const receiver of snapshot.players) {
     if (receiver.teamId !== player.teamId || receiver.playerId === player.playerId) continue;
@@ -51,10 +53,11 @@ function passTarget(
     if (range < 1.2 || range > maxDistance) continue;
     const heading = direction(origin, target, aim);
     const fromPlayer = { x: origin.x - player.position.x, y: origin.y - player.position.y };
-    if (groundKick && snapshot.phase.kind !== "live" && fromPlayer.x * heading.x + fromPlayer.y * heading.y < -0.03) {
+    if (groundKick && needsClearLane && fromPlayer.x * heading.x + fromPlayer.y * heading.y < -0.03) {
       continue;
     }
     const alignment = heading.x * aim.x + heading.y * aim.y;
+    if (snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff && alignment <= 0) continue;
     let obstruction = 0;
     for (const opponent of snapshot.players) {
       if (opponent.teamId === player.teamId) continue;
@@ -88,7 +91,9 @@ function kick(
   const range = pass ? distance(origin, pass.target) : 7;
   const heading = pass ? direction(origin, pass.target, aim) : aim;
   const fromPlayer = direction(player.position, origin, aim);
-  const safeHeading = kind === "pass" && snapshot.phase.kind !== "live" &&
+  const needsClearLane = snapshot.phase.kind !== "live" &&
+    !(snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff);
+  const safeHeading = kind === "pass" && needsClearLane &&
       fromPlayer.x * heading.x + fromPlayer.y * heading.y < 0 ? fromPlayer : heading;
   return {
     request: {
@@ -137,16 +142,32 @@ function keeperRelease(
   };
 }
 
-function selectPlayer(snapshot: SessionSnapshot, player: Player): Player {
+function selectPlayer(snapshot: SessionSnapshot, player: Player, cycle: boolean): Player {
   const { phase } = snapshot;
   const teammates = snapshot.players.filter((candidate) => candidate.teamId === player.teamId);
   if ((phase.kind === "kickoffSetup" || phase.kind === "restartSetup") && phase.teamId === player.teamId) {
     const taker = teammates.find((candidate) => candidate.playerId === phase.takerId);
     if (taker) return taker;
   }
-  teammates.sort((first, second) => distance(first.position, snapshot.ball.position) -
-    distance(second.position, snapshot.ball.position));
-  return teammates[(teammates.indexOf(player) + 1) % teammates.length];
+  if (cycle) return teammates[(teammates.indexOf(player) + 1) % teammates.length];
+
+  const { ball } = snapshot;
+  if (ball.control.kind !== "free") {
+    const { playerId } = ball.control;
+    const holder = teammates.find((candidate) => candidate.playerId === playerId);
+    if (holder) return holder;
+  }
+  const target = {
+    x: ball.position.x + 0.25 * ball.velocity.x,
+    y: ball.position.y + 0.25 * ball.velocity.y,
+  };
+  const timeToBall = (candidate: Player): number => {
+    const speed = candidate.definition.abilities.physical.maxSpeedMps;
+    return distance(candidate.position, target) / speed;
+  };
+  const outfield = teammates.filter((candidate) => candidate.definition.role === "outfield");
+  return outfield.reduce((best, candidate) => timeToBall(candidate) < timeToBall(best) ? candidate : best,
+    outfield.includes(player) ? player : outfield[0] ?? player);
 }
 
 function keyFor(event: KeyboardEvent): Key | undefined {
@@ -162,12 +183,13 @@ function tokenFor(event: KeyboardEvent): string {
 export class KeyboardControls {
   private readonly held = new Map<string, Key>();
   private action: Action | undefined;
-  private selecting = false;
+  private selection: "nearest" | "cycle" | undefined;
   private shotStarted: number | undefined;
 
   constructor(
     private readonly surface: HTMLElement,
     private readonly keyboardTarget: Window = window,
+    private readonly feedback: (message: string) => void = () => {},
   ) {
     keyboardTarget.addEventListener("keydown", this.keydown);
     keyboardTarget.addEventListener("keyup", this.keyup);
@@ -183,7 +205,7 @@ export class KeyboardControls {
   clear = (): void => {
     this.held.clear();
     this.action = undefined;
-    this.selecting = false;
+    this.selection = undefined;
     this.shotStarted = undefined;
   };
 
@@ -198,9 +220,9 @@ export class KeyboardControls {
   sample(snapshot: SessionSnapshot, config: MatchConfig): HumanInput {
     if (!this.hasMatchFocus()) this.clear();
     const action = this.action;
-    const selecting = this.selecting;
+    const selection = this.selection;
     this.action = undefined;
-    this.selecting = false;
+    this.selection = undefined;
 
     const held = new Set(this.held.values());
     const x = Number(held.has("right")) - Number(held.has("left"));
@@ -211,19 +233,35 @@ export class KeyboardControls {
     const selected = snapshot.players.find(({ playerId }) => playerId === snapshot.selectedPlayerId);
     if (!selected) return {};
 
-    const player = selecting ? selectPlayer(snapshot, selected) : selected;
-    if (player !== selected) input.selectPlayerId = player.playerId;
-    if (!action || player.action) return input;
+    const player = selection ? selectPlayer(snapshot, selected, selection === "cycle") : selected;
+    if (selection) input.selectPlayerId = player.playerId;
+    if (!action) return input;
+    if (player.action) {
+      this.feedback("Player is still finishing an action");
+      return input;
+    }
 
     const attack = snapshot.attackDirections[config.teams[0].id === player.teamId ? 0 : 1];
     const forward = { x: attack, y: 0 };
-    const aim = length > 0 ? movement : forward;
-    if (snapshot.phase.kind !== "live") return { ...input, ...restart(snapshot, config, player, action, aim) };
+    const aim = length > 0 ? movement : snapshot.phase.kind === "kickoffSetup" && config.rules.directionalKickoff
+      ? { x: -attack, y: 0 } : forward;
+    if (snapshot.phase.kind !== "live") {
+      const restartInput = restart(snapshot, config, player, action, aim);
+      if (!restartInput.request && action.kind !== "defend") {
+        const { phase } = snapshot;
+        if ((phase.kind === "kickoffSetup" || phase.kind === "restartSetup") && phase.teamId === player.teamId) {
+          this.feedback(phase.takerId !== player.playerId ? "Press Q to select the taker" : "Wait for the restart prompt");
+        }
+      }
+      return { ...input, ...restartInput };
+    }
 
     const { ball } = snapshot;
     if (ball.control.kind === "keeperHeld") {
       if (ball.control.playerId === player.playerId) {
         input.request = keeperRelease(snapshot, config, player, action, aim);
+      } else {
+        this.feedback("The keeper has the ball");
       }
       return input;
     }
@@ -243,7 +281,10 @@ export class KeyboardControls {
     const canKick = ball.control.kind === "free" || ball.control.playerId === player.playerId;
     const ballDistance = Math.hypot(ball.position.x - player.position.x,
       ball.position.y - player.position.y, ball.position.z);
-    if (!canKick || ballDistance > player.definition.abilities.physical.reachM) return input;
+    if (!canKick || ballDistance > player.definition.abilities.physical.reachM) {
+      this.feedback(canKick ? "Ball out of reach" : "Selected player doesn’t have the ball");
+      return input;
+    }
 
     if (action.kind === "shot") {
       const target = { x: attack * config.pitch.lengthM / 2, y: movement.y * config.pitch.goalWidthM * 0.32 };
@@ -280,7 +321,7 @@ export class KeyboardControls {
         this.shotStarted = this.keyboardTarget.performance.now();
         break;
       case "select":
-        this.selecting = true;
+        this.selection = event.shiftKey ? "cycle" : "nearest";
         break;
       case "pass":
       case "loft":

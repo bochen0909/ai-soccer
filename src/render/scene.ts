@@ -113,16 +113,20 @@ export class PitchRenderer {
     this.drawBallShadow(ball);
     const selected = players.find(({ playerId }) => playerId === current.selectedPlayerId);
     if (selected) this.drawSelection(selected, time);
-    const sorted = players.sort((first, second) => first.position.y - second.position.y);
-    let ballDrawn = false;
-    for (const player of sorted) {
-      if (!ballDrawn && ball.y < player.position.y - 0.2 && ball.z < 1.9) {
-        this.drawBall(ball);
-        ballDrawn = true;
+    const { control } = current.ball;
+    if (control.kind !== "free") {
+      const holder = players.find(({ playerId }) => playerId === control.playerId);
+      if (holder) {
+        const point = this.project(holder.position.x, holder.position.y);
+        const size = Math.max(5, this.scale * 0.52);
+        ellipse(ctx, point, size, size * 0.53, "#102018");
+        ellipse(ctx, point, size - 1.4, size * 0.53 - 0.9,
+          holder.teamId === this.config.teams[0].id ? "#ffae60" : "#67deff");
       }
-      this.drawPlayer(player, time);
     }
-    if (!ballDrawn) this.drawBall(ball);
+    const sorted = players.sort((first, second) => first.position.y - second.position.y);
+    for (const player of sorted) this.drawPlayer(player, time);
+    this.drawBall(ball);
   }
 
   private resize(): boolean {
@@ -442,8 +446,9 @@ export class PitchRenderer {
   private drawBall(ball: Vec3): void {
     const ctx = this.context;
     const center = this.project(ball.x, ball.y, ball.z);
-    const radius = Math.max(2.4, this.scale * this.config.ball.radiusM * 1.62);
-    ellipse(ctx, center, radius + 0.95, radius + 0.95, "#142923");
+    const radius = Math.max(3, this.scale * this.config.ball.radiusM * 1.62);
+    ellipse(ctx, center, radius + 2, radius + 2, "rgba(255, 240, 196, .48)");
+    ellipse(ctx, center, radius + 1.1, radius + 1.1, "#102019");
     ellipse(ctx, center, radius, radius, "#fff4db");
     ellipse(ctx, { x: center.x + radius * 0.29, y: center.y + radius * 0.22 },
       radius * 0.34, radius * 0.32, "#303c37");
