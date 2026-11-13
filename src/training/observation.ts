@@ -11,6 +11,13 @@ const MATCH_SIZE = 12;
 const TEAMMATE_SLOT = 11;
 const OPPONENT_SLOT = 10;
 
+/** Offsets inside the ego block of an observation row. Divide offsets by pitch length to get metres. */
+export const EGO_INDEX = {
+  positionX: 0, positionY: 1, velocityX: 2, velocityY: 3, keeper: 8,
+  hasBall: 29, ballReachable: 30, ballDistance: 33, ballOffsetX: 34, ballOffsetY: 35,
+  goalOffsetX: 36, goalOffsetY: 37, goalDistance: 38,
+} as const;
+
 export function createObservationLayout(maxPlayers: number): ObservationLayout {
   return {
     ego: EGO_SIZE, ball: BALL_SIZE, match: MATCH_SIZE,
