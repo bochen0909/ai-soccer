@@ -20,6 +20,7 @@ class Batch:
     done: np.ndarray        # [envs] bool, the episode ended (obs already belong to the next one)
     score: np.ndarray       # [envs, 2] int32, (own, opponent) goals of the ended episode
     steps: np.ndarray       # [envs] int32, length of the ended episode, or -1 if the engine failed and it was dropped
+    teacher: np.ndarray     # [envs, agents, 3] uint8, what the `teacher` profile would do now (move, sprint, act); zeros if unset
 
 
 class _Server:
@@ -51,7 +52,7 @@ class SoccerVecEnv:
     """Runs `processes * envs_per_process` matches. Every agent of the learner team is one row.
 
     Options (all optional): size (5 or 11), opponent ("default" or "tuned"), ticksPerStep, maxSteps,
-    periodTicks (shorter halves), reward ({goalScored, goalConceded, ballProgress, possession}).
+    teacher ("default" or "tuned": also return that profile's choice for every state), periodTicks (shorter halves), reward ({goalScored, goalConceded, ballProgress, possession}).
     """
 
     def __init__(self, processes=4, envs_per_process=4, seed=0, **options):
@@ -100,7 +101,8 @@ class SoccerVecEnv:
         done = take(np.uint8, e, pad(e)).astype(bool)
         score = take(np.int32, e * 2, e * 8).reshape(e, 2)
         steps = take(np.int32, e, e * 4)
-        return Batch(obs.copy(), mask, agent_mask, reward.copy(), done, score.copy(), steps.copy())
+        teacher = take(np.uint8, e * a * 3, pad(e * a * 3)).reshape(e, a, 3)
+        return Batch(obs.copy(), mask, agent_mask, reward.copy(), done, score.copy(), steps.copy(), teacher.copy())
 
     def reset(self, seed=None):
         for index, server in enumerate(self.servers):

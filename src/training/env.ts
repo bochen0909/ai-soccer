@@ -4,6 +4,7 @@ import { SoccerEngine } from "../engine/engine.js";
 import { createArcadeConfig } from "../presets/arcade.js";
 import { createDefaultAIRegistry, MatchSession } from "../session/match-session.js";
 import { decodeAction, writeActionMask } from "./actions.js";
+import { buildAgentContexts } from "./agents.js";
 import type { AgentContext } from "./actions.js";
 import { ACTION_FIELDS, createActionSpace } from "./contracts.js";
 import type {
@@ -211,12 +212,7 @@ export class SoccerTrainingEnv {
   }
 
   private contexts(observation: TeamObservation): AgentContext[] {
-    const attack = observation.attackDirections[this.learnerIndex];
-    const byId = new Map(observation.players.map((player) => [player.playerId, player]));
-    const ordered = (index: 0 | 1) => this.config.teams[index].players.map(({ id }) => byId.get(id)!);
-    const team = ordered(this.learnerIndex);
-    const opponents = ordered((1 - this.learnerIndex) as 0 | 1);
-    return team.map((ego) => ({ observation, attack, team, opponents, ego }));
+    return buildAgentContexts(observation, this.config, this.learnerIndex);
   }
 
   private result(

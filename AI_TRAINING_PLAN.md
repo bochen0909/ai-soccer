@@ -100,6 +100,8 @@ Everything below used the PPO trainer (`python/train_ppo.py`) with one shared ne
 | pass1 | Pass drill (defender right in front of the carrier, open runner near goal), pass bonus 0.3, started from shoot1, 250 iterations | Learned a passing play: scoring rose from about 3% to 25 to 33% in evaluation (20 to 30% in training). A scripted pass-then-shoot policy scores about 2.5% there, and a solo run-and-shoot policy 1% |
 | attack2 | 2v1 attack drill from pass1 (pass bonus 0.3), 250 iterations | Learned: 15 to 30% scoring in evaluation (the same drill from the shooting policy alone stayed at 0 to 4%) |
 | full1 | Full 5v5 matches against the default CPU, started from attack2, 300 iterations | No gain. Evaluation goal difference -4 to -10 against the default CPU (mostly -6 to -7) and -11 to -14 against Hard, about the same as from scratch. The attacking skills from the drills did not carry over, probably because drills start in open play with the ball and never practise kickoffs, restarts or defending |
+| imitation1/2 | Behavior cloning of the tuned CPU (40 matches, 310,000 rows, 10 to 12 epochs) | The clone matched the teacher's choices on held-out matches (move 92%, shoot 94%, tackle 99%, save 100% once rare acts were oversampled 40x) but played badly: -6 against the default CPU, -10 against Hard. Passing the teacher's own decisions through the same action interface (8 move directions, pass-to-slot) scores +3.1 against the default CPU, so the interface was not the limit. The gap was the usual cloning drift into states the teacher never visited |
+| dagger1 | DAgger: the student plays, the teacher labels each visited state, retrain on the growing dataset; 8 rounds | Steady gain: against the default CPU -7.0, -5.9, -4.8, -4.0, -3.5, -3.9, -1.4 (12% wins), -2.4; against Hard -13.8 down to -6.9. Best full-match result so far, still below the teacher's +3 |
 
 What this tells us:
 - The pipeline works end to end: environment, masks, bridge, trainer, drills and evaluation.
@@ -107,13 +109,18 @@ What this tells us:
 - The default keeper almost always stops centre shots and often misses corner shots. Corner placement is the main skill the shooting drill taught.
 
 Next, in the order I'd try them:
-1. **Imitation first (recommended).** Record the tuned CPU's decisions as (observation, action) pairs, behavior-clone a policy from them, then fine-tune with RL. This gives RL a team that already defends and holds the ball. The conversion from the baseline's world-space decisions to the policy's discrete actions is approximate (8 move directions, pass to slot k).
+1. **Imitation first (in progress: DAgger works).** Record the tuned CPU's decisions as (observation, action) pairs, behavior-clone a policy from them, then fine-tune with RL. This gives RL a team that already defends and holds the ball. The conversion from the baseline's world-space decisions to the policy's discrete actions is approximate (8 move directions, pass to slot k).
 1b. **Hybrid control.** Let the baseline AI play the goalkeeper and restarts and let the policy control only outfield players in open play.
 1c. **Mixed training.** Alternate drill episodes with full matches in one run, so attacking skills don't replace defending.
 2. **Longer and larger runs** once a drill moves, with more parallel environments, and a tuned entropy coefficient.
 3. **Reward shaping for full matches:** shots on target, passes received, and tackles won, annealed with `shapingScale`.
 4. **Imitation start:** behavior-clone the tuned CPU's decisions (hard to beat as a teacher, since it wins 297 of 300 against the default) and then fine-tune with RL.
 5. **Evolution on the network weights** as an alternative to PPO, using the same environment.
+
+Findings from the imitation work worth keeping:
+- The tuned teacher passes rarely (a few passes per match) and mostly dribbles forward, shoots close and tackles. Rare decisions (shots, saves) vanish from a cloned policy unless they are oversampled.
+- A teacher's kick toward open space (kickoff, clearance) names no receiver. The policy can only pass to a teammate slot, so these map to the best-aligned legal slot (0 of 1,578 teacher requests are now lost).
+- `scripts/record-demos.mjs` records a teacher's decisions in the policy's format. `python/imitate.py` clones them, `python/dagger.py` runs DAgger with the env server's `teacher` option (the server returns what a baseline profile would do in every state the student visits).
 
 ## Known issues
 

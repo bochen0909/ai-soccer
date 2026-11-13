@@ -7,10 +7,12 @@
 //   4 CLOSE
 // Step payload, each section padded to 4 bytes: obs f32[E*A*D], mask u8[E*A*ACT], agentMask u8[E*A],
 // reward f32[E], done u8[E], score i32[E*2] (own, opponent; valid when done), steps i32[E] (length of the ended episode,
-// or -1 when the engine failed and the episode was dropped).
+// or -1 when the engine failed and the episode was dropped), teacher u8[E*A*3] (with the `teacher` option: the
+// [move, sprint, act] a baseline profile would pick in the returned state, for imitation; zeros otherwise).
 // An environment that ends is reset at once, so the returned observation starts the next episode.
 import {
-  createArcadeConfig, createDrill, createElevenAsideConfig, profileTeamOptions, SoccerTrainingEnv,
+  AI_PROFILES, BaselineTeamAI, buildAgentContexts, createActionSpace, createArcadeConfig, createDrill,
+  createElevenAsideConfig, intentToChoice, profileTeamOptions, SoccerTrainingEnv, writeActionMask,
 } from "../dist/index.js";
 
 const INIT = 1, RESET = 2, STEP = 3, CLOSE = 4;
@@ -51,7 +53,14 @@ function begin(slot, seed) {
   slot.envs[slot.side] ??= makeEnv(slots.options, slot.side === 0 ? "home" : "away");
   slot.current = slot.envs[slot.side];
   slot.steps = 0;
-  const { drill } = slots.options;
+  const { drill, teacher } = slots.options;
+  if (teacher) {
+    slot.teacher = new BaselineTeamAI();
+    slot.teacher.reset({
+      teamId: slot.current.learnerTeamId, teamIndex: slot.side, players: slot.current.config.teams[slot.side].players,
+      config: structuredClone(AI_PROFILES[teacher].config), contractVersion: 1, seed: 0,
+    });
+  }
   for (let attempt = 0; ; attempt += 1) {
     const episodeSeed = (seed ?? seedFor(slot)) + attempt * 15_485_863 >>> 0;
     try {
@@ -68,12 +77,32 @@ function begin(slot, seed) {
   slot.episode += 1;
 }
 
+/** What a baseline profile would do in the slot's current state, as the policy's [move, sprint, act] choices. */
+function teach(slot) {
+  const config = slot.current.config;
+  const observation = slot.current.observation();
+  const space = createActionSpace(layout.agents);
+  const learnerIds = config.teams[slot.side].players.map(({ id }) => id);
+  const intents = slot.teacher.decide(structuredClone(observation), { playerIds: learnerIds, revision: 0 },
+    { actionResults: [], passIntention: null });
+  const byPlayer = new Map(intents.map((intent) => [intent.playerId, intent]));
+  const choices = new Uint8Array(layout.agents * 3);
+  const mask = new Uint8Array(space.actCount);
+  buildAgentContexts(observation, config, slot.side).forEach((agent, index) => {
+    writeActionMask(agent, space, mask, 0);
+    const intent = byPlayer.get(agent.ego.playerId) ?? { playerId: agent.ego.playerId, movement: { x: 0, y: 0 }, sprint: false };
+    const choice = intentToChoice(intent, agent, space, mask);
+    choices.set([choice.move, choice.sprint, choice.act], index * 3);
+  });
+  return choices;
+}
+
 function payload(results, ended) {
   const { envs, agents, obsSize, actCount } = layout;
   const pad = (bytes) => (bytes + 3) & ~3;
   const sizes = {
     obs: envs * agents * obsSize * 4, mask: pad(envs * agents * actCount), agentMask: pad(envs * agents),
-    reward: envs * 4, done: pad(envs), score: envs * 8, steps: envs * 4,
+    reward: envs * 4, done: pad(envs), score: envs * 8, steps: envs * 4, teacher: pad(envs * agents * 3),
   };
   const total = Object.values(sizes).reduce((sum, value) => sum + value, 0);
   const buffer = new ArrayBuffer(total);
@@ -86,6 +115,8 @@ function payload(results, ended) {
   const done = new Uint8Array(buffer, take(sizes.done), envs);
   const score = new Int32Array(buffer, take(sizes.score), envs * 2);
   const steps = new Int32Array(buffer, take(sizes.steps), envs);
+  const teacher = new Uint8Array(buffer, take(sizes.teacher), envs * agents * 3);
+  if (slots.options.teacher) slots.forEach((slot, index) => teacher.set(teach(slot), index * agents * 3));
   results.forEach((result, index) => {
     obs.set(result.observation, index * agents * obsSize);
     mask.set(result.actionMask, index * agents * actCount);

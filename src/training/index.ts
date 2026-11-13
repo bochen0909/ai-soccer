@@ -5,3 +5,8 @@ export { createObservationLayout, EGO_INDEX } from "./observation.js";
 export { decodeAction, decodeMove, writeActionMask } from "./actions.js";
 export { createDrill, DRILL_KINDS } from "./drills.js";
 export type { DrillKind } from "./drills.js";
+export { buildAgentContexts } from "./agents.js";
+export { intentToChoice, moveChoice } from "./imitation.js";
+export type { Choice } from "./imitation.js";
+export { writeObservation, FEEDBACK_STATUSES } from "./observation.js";
+export type { AgentContext } from "./actions.js";
