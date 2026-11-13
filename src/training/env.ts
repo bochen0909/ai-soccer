@@ -37,6 +37,7 @@ export class SoccerTrainingEnv {
   private readonly learnerIndex: 0 | 1;
   private readonly ticksPerStep: number;
   private readonly maxSteps: number;
+  private readonly endOnDeadBall: boolean;
   private readonly weights: RewardWeights;
   private readonly registry: TeamAIRegistry;
   private readonly opponent: NonNullable<TrainingEnvOptions["opponent"]>;
@@ -67,6 +68,7 @@ export class SoccerTrainingEnv {
       throw new RangeError("ticksPerStep must be a positive integer");
     }
     if (!Number.isSafeInteger(this.maxSteps) || this.maxSteps < 1) throw new RangeError("maxSteps must be a positive integer");
+    this.endOnDeadBall = options.endOnDeadBall ?? false;
     this.weights = { ...DEFAULT_REWARD, ...options.reward };
     this.opponent = options.opponent ?? { pluginId: "baseline" };
     if (this.opponent.pluginId === "external") throw new RangeError('The opponent cannot use the reserved "external" plugin');
@@ -142,7 +144,10 @@ export class SoccerTrainingEnv {
         throw new Error(`Controller failure: ${result.controllerFailures.map(({ message }) => message).join(" | ")}`);
       }
       finished = result.status === "finished";
-      for (const event of result.events) this.scoreEvent(event, terms) && (interrupted = true);
+      for (const event of result.events) {
+        if (this.scoreEvent(event, terms)) interrupted = true;
+        if (this.endOnDeadBall && (event.kind === "goal" || event.kind === "ballExit")) finished = true;
+      }
       for (const { action, status } of result.actionResults) {
         if (action.source === "controller") this.feedback.set(action.playerId, FEEDBACK_STATUSES.indexOf(status) + 1);
       }

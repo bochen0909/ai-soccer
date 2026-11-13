@@ -93,6 +93,9 @@ def main():
     parser.add_argument("--size", type=int, default=5, choices=[5, 11])
     parser.add_argument("--opponent", default="default", choices=["default", "tuned"])
     parser.add_argument("--period-ticks", type=int, default=None, help="shorter halves, for faster episodes")
+    parser.add_argument("--drill", default=None, choices=["shoot", "attack"], help="train on a short drill, not full matches")
+    parser.add_argument("--max-steps", type=int, default=None, help="policy steps before an episode is cut off (drills: 60)")
+    parser.add_argument("--init", default=None, help="checkpoint to start from, for example a drill-trained policy")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lam", type=float, default=0.95)
@@ -113,11 +116,19 @@ def main():
     options = {"size": args.size, "opponent": args.opponent}
     if args.period_ticks:
         options["periodTicks"] = args.period_ticks
+    if args.drill:
+        options["drill"] = args.drill
+        options["maxSteps"] = args.max_steps or 60
+        options["reward"] = {"possession": 0.0}
+    elif args.max_steps:
+        options["maxSteps"] = args.max_steps
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
     evals = {name: SoccerVecEnv(1, 4, seed=5_000_000, **{**options, "opponent": name}) for name in ("default", "tuned")}
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count
     T = args.rollout
     policy = Policy(D, C).to(device)
+    if args.init:
+        policy.load_state_dict(torch.load(args.init)["policy"])
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
     run_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", args.name)
     os.makedirs(run_dir, exist_ok=True)

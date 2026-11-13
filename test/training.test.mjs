@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ACT_NONE, ACT_PASS_BASE, ACT_SHOOT_CENTER, ACT_TACKLE, ACTION_FIELDS, createArcadeConfig,
-  createElevenAsideConfig, SoccerTrainingEnv,
+  createDrill, createElevenAsideConfig, DRILL_KINDS, SoccerTrainingEnv,
 } from '../dist/index.js';
 
 function shortConfig(base = createArcadeConfig()) {
@@ -212,4 +212,45 @@ test('players that all run into a wall or corner pile up without crashing the ph
     }
     assert.ok(result.info.tick > 1000, `move ${move} as ${side} stopped at tick ${result.info.tick}`);
   }
+});
+
+test('drills build valid situations that play out the same from either side', () => {
+  const play = (kind, side) => {
+    const config = createArcadeConfig();
+    const env = new SoccerTrainingEnv({ config, learnerTeamId: side, endOnDeadBall: true, maxSteps: 40 });
+    const outcomes = [];
+    for (let seed = 1; seed <= 6; seed += 1) {
+      let result = env.reset(seed, createDrill(kind, config, side === 'home' ? 0 : 1, seed));
+      const [startHash, startBall] = [env.hashState(), env.observation().ball.position];
+      assert.ok(Math.abs(startBall.x) < config.pitch.lengthM / 2);
+      while (!result.terminated && !result.truncated) {
+        const actions = new Array(env.agentCount * ACTION_FIELDS).fill(0);
+        actions[(env.agentCount - 1) * ACTION_FIELDS] = 1;
+        result = env.step(actions);
+      }
+      outcomes.push([result.info.step, result.info.score[0], result.reward.toFixed(4)]);
+      assert.notEqual(env.hashState(), startHash);
+    }
+    return outcomes;
+  };
+  for (const kind of DRILL_KINDS) assert.deepEqual(play(kind, 'home'), play(kind, 'away'));
+});
+
+test('an episode can end on a goal or when the ball goes out', () => {
+  const config = shortConfig();
+  const env = new SoccerTrainingEnv({ config, endOnDeadBall: true });
+  const start = liveScenario(config, { x: 26, y: 0 }, 'home-4');
+  for (const player of start.players) {
+    if (player.playerId === 'home-4') player.position = { x: 25.6, y: 0 };
+    if (player.playerId === 'away-keeper') player.position = { x: 27, y: 12 };
+  }
+  const first = env.reset(6, start);
+  const slot = config.teams[0].players.findIndex(({ id }) => id === 'home-4');
+  const actions = idle(env);
+  actions[slot * ACTION_FIELDS + 2] = ACT_SHOOT_CENTER;
+  let result = env.step(actions);
+  for (let i = 0; i < 8 && !result.terminated; i += 1) result = env.step(idle(env));
+  assert.equal(result.terminated, true);
+  assert.deepEqual(result.info.score, [1, 0]);
+  assert.ok(first.agentMask[0]);
 });

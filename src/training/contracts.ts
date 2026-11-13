@@ -65,6 +65,8 @@ export interface TrainingEnvOptions {
   /** Policy steps before truncation. Defaults to no limit besides match completion. */
   maxSteps?: number;
   reward?: Partial<RewardWeights>;
+  /** End the episode as soon as a goal is scored or the ball leaves play. Meant for short drills. */
+  endOnDeadBall?: boolean;
 }
 
 export interface StepInfo {

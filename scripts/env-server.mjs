@@ -1,4 +1,5 @@
 // Hosts several SoccerTrainingEnv instances and serves them over stdio for a Python trainer.
+// Options include drill ("shoot" or "attack") for short situation drills that end on a goal or dead ball.
 // Frames, both directions: u32 little-endian length, u8 type, body.
 //   1 INIT  body JSON  -> 129 JSON {envs, agents, obsSize, actCount, moveCount}
 //   2 RESET body JSON  -> 130 binary step payload
@@ -9,7 +10,7 @@
 // or -1 when the engine failed and the episode was dropped).
 // An environment that ends is reset at once, so the returned observation starts the next episode.
 import {
-  createArcadeConfig, createElevenAsideConfig, profileTeamOptions, SoccerTrainingEnv,
+  createArcadeConfig, createDrill, createElevenAsideConfig, profileTeamOptions, SoccerTrainingEnv,
 } from "../dist/index.js";
 
 const INIT = 1, RESET = 2, STEP = 3, CLOSE = 4;
@@ -22,7 +23,7 @@ function makeEnv(options, learnerTeamId) {
   return new SoccerTrainingEnv({
     config, learnerTeamId, opponent: profileTeamOptions(options.opponent ?? "default"),
     ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward,
-    maxPlayersPerTeam: options.maxPlayersPerTeam,
+    maxPlayersPerTeam: options.maxPlayersPerTeam, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall,
   });
 }
 
@@ -50,7 +51,11 @@ function begin(slot, seed) {
   slot.envs[slot.side] ??= makeEnv(slots.options, slot.side === 0 ? "home" : "away");
   slot.current = slot.envs[slot.side];
   slot.steps = 0;
-  slot.last = slot.current.reset(seed ?? seedFor(slot));
+  const episodeSeed = seed ?? seedFor(slot);
+  const { drill } = slots.options;
+  // Drills start from a built situation. Without one, the match starts from kickoff.
+  const scenario = drill ? createDrill(drill, slot.current.config, slot.side, episodeSeed) : undefined;
+  slot.last = slot.current.reset(episodeSeed, scenario);
   slot.episode += 1;
 }
 
