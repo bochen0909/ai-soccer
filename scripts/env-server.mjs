@@ -51,11 +51,20 @@ function begin(slot, seed) {
   slot.envs[slot.side] ??= makeEnv(slots.options, slot.side === 0 ? "home" : "away");
   slot.current = slot.envs[slot.side];
   slot.steps = 0;
-  const episodeSeed = seed ?? seedFor(slot);
   const { drill } = slots.options;
-  // Drills start from a built situation. Without one, the match starts from kickoff.
-  const scenario = drill ? createDrill(drill, slot.current.config, slot.side, episodeSeed) : undefined;
-  slot.last = slot.current.reset(episodeSeed, scenario);
+  for (let attempt = 0; ; attempt += 1) {
+    const episodeSeed = (seed ?? seedFor(slot)) + attempt * 15_485_863 >>> 0;
+    try {
+      // Drills start from a built situation. Without one, the match starts from kickoff.
+      const scenario = drill ? createDrill(drill, slot.current.config, slot.side, episodeSeed) : undefined;
+      slot.last = slot.current.reset(episodeSeed, scenario);
+      break;
+    } catch (error) {
+      // A seed that builds an invalid situation is skipped, not fatal.
+      process.stderr.write(`env-server: seed ${episodeSeed} could not start an episode: ${error instanceof Error ? error.message : error}\n`);
+      if (attempt >= 5) throw error;
+    }
+  }
   slot.episode += 1;
 }
 

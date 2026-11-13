@@ -254,3 +254,14 @@ test('an episode can end on a goal or when the ball goes out', () => {
   assert.deepEqual(result.info.score, [1, 0]);
   assert.ok(first.agentMask[0]);
 });
+
+test('drills never place players on top of each other, whatever the seed', () => {
+  const config = createArcadeConfig();
+  const env = new SoccerTrainingEnv({ config, endOnDeadBall: true });
+  for (const kind of DRILL_KINDS) {
+    for (let seed = 1; seed <= 400; seed += 1) {
+      // Scenario validation rejects overlapping bodies or an illegal ball, so a successful reset is the check.
+      env.reset(seed, createDrill(kind, config, seed % 2 === 0 ? 0 : 1, seed));
+    }
+  }
+});

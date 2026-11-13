@@ -2,6 +2,9 @@ import type { MatchConfig, ScenarioDefinition, ScenarioPlayerState, Vec2 } from 
 
 export type DrillKind = "shoot" | "attack";
 
+const MIN_SPACING_M = 1.2;
+const MAX_PLACEMENT_ATTEMPTS = 50;
+
 export const DRILL_KINDS: readonly DrillKind[] = ["shoot", "attack"];
 
 /** Small deterministic generator so the same seed always builds the same drill. */
@@ -34,34 +37,46 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
   const outfield = (players: typeof learner) => players.filter((player) => player.role === "outfield");
   const keeper = (players: typeof learner) => players.find((player) => player.role === "goalkeeper")!;
 
-  const placed = new Map<string, Vec2>();
+  let placed = new Map<string, Vec2>();
   const put = (id: string, x: number, y: number) => {
     placed.set(id, { x: Math.max(-goalX + 1, Math.min(goalX - 1, x)), y: Math.max(-edgeY, Math.min(edgeY, y)) });
+  };
+  /** Everyone needs room around them, and the ball needs room too unless its carrier is next to it. */
+  const crowded = (ball: Vec2, carrierId: string): boolean => {
+    const spots = [...placed.entries()];
+    return spots.some(([id, a], i) =>
+      (id !== carrierId && Math.hypot(a.x - ball.x, a.y - ball.y) < MIN_SPACING_M) ||
+      spots.slice(i + 1).some(([, b]) => Math.hypot(a.x - b.x, a.y - b.y) < MIN_SPACING_M));
   };
 
   const carrier = outfield(learner).at(-1)!;
   const mates = outfield(learner).filter((player) => player !== carrier);
   const foes = outfield(rival);
-  put(keeper(learner).id, -goalX + 1.5, 0);
-  put(keeper(rival).id, goalX - 1.5, between(-1.5, 1.5));
 
-  let ballAt: Vec2;
-  if (kind === "shoot") {
-    ballAt = { x: goalX - between(8, 16), y: between(-6, 6) };
-    put(carrier.id, ballAt.x - 0.45, ballAt.y);
-    // Teammates stay behind the play. Rivals start deep in their half of the pitch, 14 m or more away.
-    mates.forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
-    foes.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
-  } else {
-    const side = next() < 0.5 ? -1 : 1;
-    ballAt = { x: goalX - between(20, 26), y: side * between(0, 6) };
-    put(carrier.id, ballAt.x - 0.45, ballAt.y);
-    const runner = mates[0];
-    if (runner) put(runner.id, ballAt.x + between(4, 8), -side * between(5, 10));
-    mates.slice(1).forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
-    const [defender, ...rest] = foes;
-    if (defender) put(defender.id, goalX - between(9, 13), between(-3, 3));
-    rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
+  let ballAt: Vec2 = { x: 0, y: 0 };
+  for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt += 1) {
+    placed = new Map();
+    put(keeper(learner).id, -goalX + 1.5, 0);
+    put(keeper(rival).id, goalX - 1.5, between(-1.5, 1.5));
+    if (kind === "shoot") {
+      ballAt = { x: goalX - between(8, 16), y: between(-6, 6) };
+      put(carrier.id, ballAt.x - 0.45, ballAt.y);
+      // Teammates stay behind the play. Rivals start deep in their half of the pitch, 14 m or more away.
+      mates.forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
+      foes.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
+    } else {
+      const side = next() < 0.5 ? -1 : 1;
+      ballAt = { x: goalX - between(20, 26), y: side * between(0, 6) };
+      put(carrier.id, ballAt.x - 0.45, ballAt.y);
+      const runner = mates[0];
+      if (runner) put(runner.id, ballAt.x + between(4, 8), -side * between(5, 10));
+      mates.slice(1).forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
+      const [defender, ...rest] = foes;
+      if (defender) put(defender.id, goalX - between(9, 13), between(-3, 3));
+      rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
+    }
+    if (!crowded(ballAt, carrier.id)) break;
+    if (attempt === MAX_PLACEMENT_ATTEMPTS - 1) throw new Error(`Drill "${kind}" could not find room for every player`);
   }
 
   const players: ScenarioPlayerState[] = [...learner, ...rival].map(({ id }) => {
