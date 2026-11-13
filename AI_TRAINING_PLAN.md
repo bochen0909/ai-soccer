@@ -86,7 +86,8 @@ Training infrastructure
 - [x] Persistent worker pool: several Node processes, several environments each, batched stepping (about 2,500 to 3,000 steps per second on 12 cores)
 - [ ] Throughput target and profiling (the learner decides every tick, and cloning observations per tick is the main overhead)
 - [x] Policy export and in-engine inference: `python/export_policy.py` writes exact float32 weights to `models/trained-5v5.json`; `NeuralTeamAI` (team AI "neural") runs them in the engine; a test pins its outputs to PyTorch's. In-game, 64 held-out matches: +1.20 ±0.67 against the default CPU and -0.11 ±0.69 against Hard. The browser app offers it as "CPU Trained" (5-a-side)
-- [ ] League training: keep fine-tuning against the default CPU, Hard and past versions of the trained policy (the env server can already take a `trained` opponent once the neural plugin is registered there)
+- [x] League training: `train_ppo.py --league-anchor` trains against a pool of the default CPU, Hard, an anchor model and snapshots of itself, weighted toward the opponents it beats least (`SET_POOL` in the env server). Results in the table below (league1)
+- [ ] Several anchors, one per generation, promoted only after a 64-match win over the previous one
 - [ ] Re-run imitation with more teacher diversity (default and tuned teachers, 11v11) and a bigger network if the policy plateaus
 
 ## RL results so far
@@ -106,6 +107,9 @@ Everything below used the PPO trainer (`python/train_ppo.py`) with one shared ne
 | dagger1 | DAgger: the student plays, the teacher labels each visited state, retrain on the growing dataset; 8 rounds | Steady gain: against the default CPU -7.0, -5.9, -4.8, -4.0, -3.5, -3.9, -1.4 (12% wins), -2.4; against Hard -13.8 down to -6.9. Best full-match result so far, still below the teacher's +3 |
 | dagger2 | Longer DAgger: 16 rounds, 900-step rollouts, 1.46 million rows | Against the default CPU the 8-match readings went -6.3 up to +0.1 to +0.6 from round 9 on. Held-out (64 matches each): **+0.47 ±0.50 against the default CPU** (48% wins, 22% draws, 30% losses) and -4.88 ±0.75 against Hard (3% wins) |
 | ft1 | PPO fine-tuning from dagger2 with the goal reward: lr 1e-4, clip 0.1, 10 value-only warm-up iterations, 300 iterations, 16 matches per evaluation | Held-out (64 matches each): **+0.70 ±0.62 against the default CPU** (48% wins, 17% draws, 34% losses) and **+0.45 ±0.67 against Hard** (44% / 12% / 44%). Hard improved from -4.9 to about even. Mid-run readings of +2 were partly luck, since 16-match evaluations swing by 2 to 3 goals; only the 64-match held-out numbers should be quoted |
+| league1 | League PPO from ft1 under the random-kickoff rule: pool of default, Hard, ft1 as anchor and 6 snapshots, 600 iterations, lr 1e-4, clip 0.1 | Held-out (64 matches each, Python): **+1.36 ±0.60 against the default CPU**, **+0.09 ±0.66 against Hard**, **+1.69 ±0.50 against ft1** (78% wins). In the engine, same seeds: +1.55 ±0.48 against the default CPU and -0.63 ±0.65 against Hard. Under the random-kickoff rule ft1 scored +1.41 ±0.64 and -0.86 ±0.60. The 16-match evaluations during training swung from -2.9 to +0.2 against Hard and were not a usable signal |
+
+Note: the ft1 numbers in the table above were measured under the old rule where home always kicked off. Random kickoff is now always on.
 
 What this tells us:
 - The best trained player (ft1) is level with the Hard CPU and slightly ahead of the default CPU in full 5v5 matches. It was trained by cloning the tuned CPU, correcting drift with DAgger, and fine-tuning with PPO on the goal reward. Plain PPO from scratch and drill-first PPO never got past about -5
@@ -162,8 +166,10 @@ node scripts/record-demos.mjs --matches 40 --out demos/tuned              # teac
 python3 python/dagger.py --demos demos/tuned --name dagger2 --rounds 16 --rollout-steps 900
 python3 python/train_ppo.py --name ft1 --init runs/dagger2/latest.pt --lr 1e-4 --entropy 0.001 --clip 0.1 \
   --value-warmup 10 --iterations 300 --eval-every 25 --eval-episodes 4
-python3 python/evaluate_checkpoint.py runs/ft1/latest.pt --matches 64       # held-out check in Python
-python3 python/export_policy.py runs/ft1/latest.pt models/trained-5v5.json --check test/fixtures/policy-check.json
+python3 python/evaluate_checkpoint.py runs/league1/latest.pt --matches 64       # held-out check in Python
+python3 python/train_ppo.py --name league1 --init runs/ft1/latest.pt --league-anchor models/trained-5v5.json \
+  --iterations 600 --lr 1e-4 --clip 0.1 --entropy 0.001 --eval-every 50 --snapshot-every 25 --snapshots-kept 6   # use the old model as anchor before exporting
+python3 python/export_policy.py runs/league1/latest.pt models/trained-5v5.json --check test/fixtures/policy-check.json
 npm run tune -- compare --model models/trained-5v5.json --opponent-profile tuned --matches 64   # held-out check in the engine
 ```
 

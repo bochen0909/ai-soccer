@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
+from policy_io import write_policy_json
 from soccer_env import SoccerVecEnv
 
 NEG = -1e9
@@ -98,6 +99,13 @@ def main():
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="drill reward when a teammate receives a pass")
     parser.add_argument("--value-warmup", type=int, default=0,
                         help="iterations that train only the value head, so a pretrained policy is not wrecked by a random critic")
+    parser.add_argument("--league-anchor", default=None,
+                        help="policy JSON to keep as a fixed league opponent; turns on league training against the CPUs, "
+                             "this anchor, and snapshots of the policy itself")
+    parser.add_argument("--snapshot-every", type=int, default=25, help="league: iterations between snapshots of the policy")
+    parser.add_argument("--snapshots-kept", type=int, default=6, help="league: how many recent snapshots stay in the pool")
+    parser.add_argument("--pfsp-power", type=float, default=2.0,
+                        help="league: opponents the policy beats less often are drawn more often, by (1.1 - win rate)^power")
     parser.add_argument("--init", default=None, help="checkpoint to start from, for example a drill-trained policy")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
@@ -125,16 +133,35 @@ def main():
         options["reward"] = {"possession": 0.0, "passCompleted": args.pass_bonus}
     elif args.max_steps:
         options["maxSteps"] = args.max_steps
+    run_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", args.name)
+    os.makedirs(run_dir, exist_ok=True)
+
+    # The league: fixed opponents plus snapshots of the policy. `rate` is a running estimate of how often the
+    # policy beats each one (1 for a win, 0.5 for a draw), which sets how often it is drawn next.
+    league = {}
+    next_snapshot_id = 10
+
+    def pool_message():
+        weights = {key: max(0.05, (1.1 - entry["rate"]) ** args.pfsp_power) for key, entry in league.items()}
+        return [{"id": key, "spec": entry["spec"], "weight": weights[key]} for key, entry in league.items()]
+
+    eval_specs = {"default": "default", "tuned": "tuned"}
+    if args.league_anchor:
+        anchor = os.path.abspath(args.league_anchor)
+        for key, name, spec in ((0, "default", "default"), (1, "tuned", "tuned"), (2, "anchor", "model:" + anchor)):
+            league[key] = {"name": name, "spec": spec, "rate": 0.5, "snapshot": None}
+        eval_specs["anchor"] = "model:" + anchor
+        options["pool"] = pool_message()
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
-    evals = {name: SoccerVecEnv(1, 4, seed=5_000_000, **{**options, "opponent": name}) for name in ("default", "tuned")}
+    eval_shape = (2, 2) if args.league_anchor else (1, 4)
+    evals = {name: SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None})
+             for name, spec in eval_specs.items()}
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count
     T = args.rollout
     policy = Policy(D, C).to(device)
     if args.init:
         policy.load_state_dict(torch.load(args.init)["policy"])
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
-    run_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", args.name)
-    os.makedirs(run_dir, exist_ok=True)
     log = open(os.path.join(run_dir, "log.jsonl"), "a")
     print(f"{E} envs x {A} agents, obs {D}, acts {C}, {T} steps per rollout -> {E * T * A} samples per iteration")
 
@@ -156,6 +183,11 @@ def main():
                 store["rew"].append(batch.reward); store["done"].append(batch.done)
                 ok = batch.done & (batch.steps >= 0)
                 finished_diffs.extend((batch.score[ok, 0] - batch.score[ok, 1]).tolist())
+                for i in np.flatnonzero(ok):
+                    entry = league.get(int(batch.opponent[i]))
+                    if entry is not None:   # an opponent that left the pool can still finish its running episodes
+                        diff = batch.score[i, 0] - batch.score[i, 1]
+                        entry["rate"] += 0.05 * ((1.0 if diff > 0 else 0.5 if diff == 0 else 0.0) - entry["rate"])
             total_steps += T * E
 
             with torch.no_grad():
@@ -227,6 +259,19 @@ def main():
                     record[f"eval_{name}"] = evaluate_policy(policy, evaluation_env, device, args.eval_episodes)
                 torch.save({"policy": policy.state_dict(), "args": vars(args), "iteration": iteration},
                            os.path.join(run_dir, "latest.pt"))
+                torch.save({"policy": policy.state_dict(), "args": vars(args), "iteration": iteration},
+                           os.path.join(run_dir, f"iter_{iteration:04d}.pt"))
+            if league:
+                if iteration % args.snapshot_every == 0:
+                    path = os.path.join(run_dir, "league", f"snapshot_{iteration:04d}.json")
+                    write_policy_json(policy.state_dict(), path, args.name, iteration)
+                    # A new snapshot is as strong as the policy itself, so it starts at an even rate.
+                    league[next_snapshot_id] = {"name": f"snapshot_{iteration}", "spec": "model:" + path, "rate": 0.5, "snapshot": iteration}
+                    next_snapshot_id += 1
+                    for key in sorted(k for k, v in league.items() if v["snapshot"] is not None)[:-args.snapshots_kept]:
+                        del league[key]
+                env.set_pool(pool_message())
+                record["league"] = {entry["name"]: round(entry["rate"], 3) for entry in league.values()}
             log.write(json.dumps(record) + "\n"); log.flush()
             summary = (f"it {iteration:4d} steps {total_steps:8d} sps {record['sps']:6.0f} "
                        f"train diff {record['train_goal_diff'] if record['train_goal_diff'] is None else round(record['train_goal_diff'], 2)} "
@@ -235,6 +280,8 @@ def main():
                 if f"eval_{name}" in record:
                     e = record[f"eval_{name}"]
                     summary += f" | vs {name}: diff {e['goal_diff']:+.2f} win {e['win_rate']:.2f}"
+            if league and "eval_default" in record:
+                summary += "\n          league win rates: " + "  ".join(f"{entry['name']} {entry['rate']:.2f}" for entry in league.values())
             print(summary, flush=True)
     finally:
         env.close()

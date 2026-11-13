@@ -193,8 +193,12 @@ export class NeuralTeamAI implements TeamAI {
   }
 }
 
+/** Registers an already decoded network as team AI "neural" (or another ID). */
+export function registerNeuralNetwork(registry: TeamAIRegistry, network: Network, id = "neural"): TeamAIRegistry {
+  return registry.register(id, () => new NeuralTeamAI(network, id));
+}
+
 /** Registers the trained policy as team AI "neural" (or another ID). */
 export function registerNeuralPolicy(registry: TeamAIRegistry, weights: PolicyWeights, id = "neural"): TeamAIRegistry {
-  const network = decodeWeights(weights);
-  return registry.register(id, () => new NeuralTeamAI(network, id));
+  return registerNeuralNetwork(registry, decodeWeights(weights), id);
 }

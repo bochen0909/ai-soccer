@@ -5,7 +5,6 @@ Example:
   python3 python/export_policy.py runs/ft1/latest.pt models/trained-5v5.json --check test/fixtures/policy-check.json
 """
 import argparse
-import base64
 import json
 import os
 import sys
@@ -13,14 +12,8 @@ import sys
 import numpy as np
 import torch
 
+from policy_io import write_policy_json
 from train_ppo import Policy
-
-TENSORS = {  # name in the file -> name in the PyTorch state dict
-    "w1": "body.0.weight", "b1": "body.0.bias", "w2": "body.2.weight", "b2": "body.2.bias",
-    "moveW": "move.weight", "moveB": "move.bias", "sprintW": "sprint.weight", "sprintB": "sprint.bias",
-    "actW": "act.weight", "actB": "act.bias",
-}
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -32,18 +25,9 @@ def main():
     checkpoint = torch.load(args.checkpoint)
     state = checkpoint["policy"]
     obs_size = state["body.0.weight"].shape[1]
-    hidden = state["body.0.weight"].shape[0]
     act_count = state["act.weight"].shape[0]
-    tensors = {}
-    for name, source in TENSORS.items():
-        array = state[source].detach().numpy().astype("<f4")
-        tensors[name] = {"shape": list(array.shape), "data": base64.b64encode(array.tobytes()).decode("ascii")}
-    document = {"version": 1, "obsSize": obs_size, "hidden": hidden, "actCount": act_count,
-                "moveCount": state["move.weight"].shape[0], "source": os.path.basename(os.path.dirname(args.checkpoint)),
-                "iteration": checkpoint.get("iteration"), "tensors": tensors}
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    json.dump(document, open(args.out, "w"), separators=(",", ":"))
-    print(f"wrote {args.out}: {obs_size} inputs, {hidden} hidden units, {act_count} acts, {os.path.getsize(args.out) / 1024:.0f} KB")
+    size = write_policy_json(state, args.out, os.path.basename(os.path.dirname(args.checkpoint)), checkpoint.get("iteration"))
+    print(f"wrote {args.out}: {obs_size} inputs, {state['body.0.weight'].shape[0]} hidden units, {act_count} acts, {size / 1024:.0f} KB")
 
     if args.check:
         # Real observations from a short match, so the game's network can be tested against PyTorch exactly.

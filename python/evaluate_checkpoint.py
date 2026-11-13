@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--matches", type=int, default=64)
     parser.add_argument("--seed", type=int, default=900_000_000)
     parser.add_argument("--greedy", action="store_true", help="use the most likely action instead of sampling")
+    parser.add_argument("--anchor", default="../models/trained-5v5.json", help="exported policy to also play against")
     args = parser.parse_args()
     path = args.checkpoint if os.path.isabs(args.checkpoint) else os.path.join(os.getcwd(), args.checkpoint)
     checkpoint = torch.load(path)
@@ -46,10 +47,11 @@ def main():
     policy = Policy(obs_size, act_count)
     policy.load_state_dict(checkpoint["policy"])
     print(f"{args.checkpoint}, iteration {checkpoint.get('iteration')}, {'greedy' if args.greedy else 'sampled'} actions, held-out seeds")
-    for opponent in ("default", "tuned"):
+    anchor = os.path.abspath(args.anchor)
+    for opponent in ("default", "tuned", f"model:{anchor}"):
         diffs = play(policy, opponent, args.matches, args.seed, args.greedy)
         half = 1.96 * diffs.std(ddof=1) / np.sqrt(len(diffs))
-        print(f"  vs {opponent:7s} {len(diffs)} matches: goal diff {diffs.mean():+.2f} +/- {half:.2f}   "
+        print(f"  vs {opponent.split(":")[0]:7s} {len(diffs)} matches: goal diff {diffs.mean():+.2f} +/- {half:.2f}   "
               f"wins {np.mean(diffs > 0):.2f}  draws {np.mean(diffs == 0):.2f}  losses {np.mean(diffs < 0):.2f}")
 
 

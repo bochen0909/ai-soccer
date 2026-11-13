@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-INIT, RESET, STEP, CLOSE = 1, 2, 3, 4
+INIT, RESET, STEP, CLOSE, SET_POOL = 1, 2, 3, 4, 5
 
 
 @dataclass
@@ -20,6 +20,7 @@ class Batch:
     done: np.ndarray        # [envs] bool, the episode ended (obs already belong to the next one)
     score: np.ndarray       # [envs, 2] int32, (own, opponent) goals of the ended episode
     steps: np.ndarray       # [envs] int32, length of the ended episode, or -1 if the engine failed and it was dropped
+    opponent: np.ndarray    # [envs] int32, pool ID of the opponent in the ended episode
     teacher: np.ndarray     # [envs, agents, 3] uint8, what the `teacher` profile would do now (move, sprint, act); zeros if unset
 
 
@@ -51,7 +52,8 @@ class _Server:
 class SoccerVecEnv:
     """Runs `processes * envs_per_process` matches. Every agent of the learner team is one row.
 
-    Options (all optional): size (5 or 11), opponent ("default" or "tuned"), ticksPerStep, maxSteps,
+    Options (all optional): size (5 or 11), opponent ("default", "tuned" or "model:<policy JSON path>"), pool (a list as
+    in set_pool, which replaces `opponent`), ticksPerStep, maxSteps,
     teacher ("default" or "tuned": also return that profile's choice for every state), periodTicks (shorter halves), reward ({goalScored, goalConceded, ballProgress, possession}).
     """
 
@@ -101,8 +103,19 @@ class SoccerVecEnv:
         done = take(np.uint8, e, pad(e)).astype(bool)
         score = take(np.int32, e * 2, e * 8).reshape(e, 2)
         steps = take(np.int32, e, e * 4)
+        opponent = take(np.int32, e, e * 4)
         teacher = take(np.uint8, e * a * 3, pad(e * a * 3)).reshape(e, a, 3)
-        return Batch(obs.copy(), mask, agent_mask, reward.copy(), done, score.copy(), steps.copy(), teacher.copy())
+        return Batch(obs.copy(), mask, agent_mask, reward.copy(), done, score.copy(), steps.copy(), opponent.copy(), teacher.copy())
+
+    def set_pool(self, pool):
+        """Sets the opponents later episodes are drawn from: a list of {"id", "spec", "weight"}.
+
+        A spec is "default", "tuned", or "model:<path to a policy JSON file>". The change applies as each
+        episode ends, so running episodes finish against the opponent they started with.
+        """
+        body = json.dumps(pool).encode()
+        for server in self.servers:
+            server.send(SET_POOL, body)
 
     def reset(self, seed=None):
         for index, server in enumerate(self.servers):
