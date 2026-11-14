@@ -1,5 +1,5 @@
 // Hosts several SoccerTrainingEnv instances and serves them over stdio for a Python trainer.
-// Options include drill ("shoot", "attack" or "pass") for short situation drills that end on a goal or dead ball.
+// Options include drill ("shoot", "attack", "pass", "three" or "counter"), or drillMix {p, kinds, maxSteps} to start some episodes as drills for short situation drills that end on a goal or dead ball.
 // Frames, both directions: u32 little-endian length, u8 type, body.
 //   1 INIT  body JSON  -> 129 JSON {envs, agents, obsSize, actCount, moveCount}
 //   2 RESET body JSON  -> 130 binary step payload
@@ -103,12 +103,18 @@ function seedFor(slot) {
 function begin(slot, seed) {
   slot.side = slot.episode % 2;
   const opponent = pickOpponent(slot);
-  const key = `${slot.side}|${opponent.spec}`;
-  if (!slot.envs.has(key)) slot.envs.set(key, makeEnv(slots.options, slot.side === 0 ? "home" : "away", opponent.spec));
+  // With drillMix, some episodes are short drills (ending on a goal or dead ball) instead of whole matches.
+  const mix = slots.options.drillMix;
+  const drill = slots.options.drill ?? (mix && slot.random() < mix.p ? mix.kinds[Math.floor(slot.random() * mix.kinds.length)] : undefined);
+  const key = `${slot.side}|${opponent.spec}|${drill ? "drill" : "match"}`;
+  if (!slot.envs.has(key)) {
+    const envOptions = drill && !slots.options.drill ? { ...slots.options, drill, maxSteps: mix.maxSteps ?? 60 } : slots.options;
+    slot.envs.set(key, makeEnv(envOptions, slot.side === 0 ? "home" : "away", opponent.spec));
+  }
   slot.current = slot.envs.get(key);
   slot.opponentId = opponent.id;
   slot.steps = 0;
-  const { drill, teacher } = slots.options;
+  const { teacher } = slots.options;
   if (teacher) {
     slot.teacher = new BaselineTeamAI();
     slot.teacher.reset({

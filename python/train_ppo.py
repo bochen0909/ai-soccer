@@ -94,7 +94,10 @@ def main():
     parser.add_argument("--size", type=int, default=5, choices=[5, 11])
     parser.add_argument("--opponent", default="default", choices=["default", "tuned"])
     parser.add_argument("--period-ticks", type=int, default=None, help="shorter halves, for faster episodes")
-    parser.add_argument("--drill", default=None, choices=["shoot", "attack", "pass"], help="train on a short drill, not full matches")
+    parser.add_argument("--drill", default=None, choices=["shoot", "attack", "pass", "three", "counter"], help="train on a short drill, not full matches")
+    parser.add_argument("--drill-mix", type=float, default=0.0, help="league: share of episodes that start as a short drill")
+    parser.add_argument("--drill-kinds", nargs="+", default=["three", "counter", "pass", "attack"],
+                        choices=["shoot", "attack", "pass", "three", "counter"])
     parser.add_argument("--max-steps", type=int, default=None, help="policy steps before an episode is cut off (drills: 60)")
     parser.add_argument("--assist-bonus", type=float, default=0.0, help="extra reward on a goal scored within 6 s of a completed pass")
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="reward when a teammate receives a pass (drills and full matches)")
@@ -144,6 +147,8 @@ def main():
         options["reward"] = {"possession": 0.0, "passCompleted": args.pass_bonus}
     elif args.max_steps:
         options["maxSteps"] = args.max_steps
+    if args.drill_mix > 0 and not args.drill:
+        options["drillMix"] = {"p": args.drill_mix, "kinds": args.drill_kinds, "maxSteps": 60}
     if (args.pass_bonus or args.assist_bonus) and not args.drill:
         options["reward"] = {"passCompleted": args.pass_bonus, "assist": args.assist_bonus}
     run_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", args.name)
@@ -177,7 +182,7 @@ def main():
         options["pool"] = pool_message()
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
     eval_shape = (8, max(1, args.eval_envs // 8))
-    evals = {name: SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None})
+    evals = {name: SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None, "drillMix": None})
              for name, spec in eval_specs.items()}
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count
     T = args.rollout

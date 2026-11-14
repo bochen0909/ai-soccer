@@ -238,3 +238,9 @@ Observed in the browser: players dribble to a shot with little passing, and at t
 - Five Hard-AI variants (more pressing, wider, dribbling, short passing, risky; `tuning/variants/`, local) all lose to gen5 by about 4 goals a match (41 to 47 wins of 48). They add only easy opponents, so no league run was made with them. `arena` now accepts `params:<path>`.
 - New reward `assist` (`--assist-bonus`): added to a goal scored within 6 s of a teammate receiving a pass. `role_assist1` (400 iterations from gen5, bonus 0.5) beats gen5 by 0.45 +/- 0.26 over 128 matches. Promoted as gen6; anchor `models/anchors/gen6-role_assist1.json`.
 - Passing is not rarer than for Hard: roughly 8 completed teammate passes per match for gen5 and gen6 against about 6.6 for Hard, although the dribble share of live ticks stays ~52 to 54% against ~29 to 33%. The model carries the ball longer between passes, rather than not passing.
+
+## GRF-style drills mixed into league training (gen7)
+
+Borrowed from Google Research Football's academy: short situations where the right play is a pass. New drills `three` (3v2, one defender presses the carrier) and `counter` (counterattack from the halfway line), and `--drill-mix P` / `--drill-kinds` start a share of league episodes from a drill (ending on a goal or dead ball, max 60 steps). Evaluation stays on full matches.
+
+`role_drill1` (400 iterations from gen6, 20% drills, assist bonus 0.5, anchors gen5 and gen6) beats gen6 by 0.52 +/- 0.26 over 128 matches (W62 D36 L30) and completes about 9.7 teammate passes per match against 8.2 for gen6 and 6.6 for Hard. Promoted as gen7; anchor `models/anchors/gen7-role_drill1.json`.
