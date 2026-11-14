@@ -172,6 +172,9 @@ function validateConfig(config: MatchConfig, seed: number): void {
   for (const key of ["restartInputTicks", "keeperHoldTicks"] as const) {
     integer(rules[key], 1, Number.MAX_SAFE_INTEGER, "configuration", `rules.${key}`);
   }
+  if (rules.restartSupportM !== undefined) {
+    inRange(rules.restartSupportM, 0, Math.hypot(pitch.lengthM, pitch.widthM), "configuration", "rules.restartSupportM");
+  }
   inRange(rules.restartExclusionM, 0, Math.hypot(pitch.lengthM, pitch.widthM),
     "configuration", "rules.restartExclusionM");
 
@@ -391,6 +394,29 @@ function takerPosition(state: EngineState, player: PlayerState, restart: Restart
   return position;
 }
 
+/**
+ * Where a player starts a restart. With `rules.restartSupportM`, the awarded team's outfield players close in on the
+ * ball along the line to where they stood: the nearest ends up within one step, the next within two, and so on.
+ */
+function supportPosition(
+  state: EngineState, player: PlayerState, restart: RestartKind, awardedTeam: TeamId, spot: Vec2, takerId: PlayerId,
+): Vec2 {
+  const step = state.config.rules.restartSupportM;
+  if (!step || (restart !== "throwIn" && restart !== "corner") || player.teamId !== awardedTeam ||
+      player.definition.role === "goalkeeper") return player.position;
+  const mates = state.players
+    .filter((other) => other.teamId === awardedTeam && other.definition.role !== "goalkeeper" &&
+      other.playerId !== takerId)
+    .map((other) => ({ id: other.playerId, d: distance(other.position, spot) }))
+    .sort((a, b) => a.d - b.d || compareIds(a.id, b.id));
+  const rank = mates.findIndex((mate) => mate.id === player.playerId);
+  const away = distance(player.position, spot);
+  const limit = step * (rank + 1);
+  if (rank < 0 || away <= limit || away === 0) return player.position;
+  const scale = limit / away;
+  return { x: spot.x + (player.position.x - spot.x) * scale, y: spot.y + (player.position.y - spot.y) * scale };
+}
+
 function placeOtherPlayer(
   state: EngineState,
   player: PlayerState,
@@ -424,7 +450,7 @@ function placeOtherPlayer(
 
   const desired = restart === "kickoff"
     ? { x: player.definition.formation.x * attack, y: player.definition.formation.y * attack }
-    : player.position;
+    : supportPosition(state, player, restart, awardedTeam, spot, occupied[0].playerId);
   const start = project(desired);
   if (legal(start)) return start;
 

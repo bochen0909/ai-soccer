@@ -91,6 +91,11 @@ export interface MatchRules {
   halftimeTicks: number;
   keeperHoldTicks: number;
   restartExclusionM: number;
+  /**
+   * When set, the team awarded a throw-in or corner starts the restart with its outfield players pulled toward the
+   * ball: the nearest at most this many meters away, the next at most twice as far, and so on. Off when unset.
+   */
+  restartSupportM?: number;
 }
 
 export interface MatchConfig {

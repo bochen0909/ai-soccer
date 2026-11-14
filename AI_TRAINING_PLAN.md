@@ -223,3 +223,12 @@ npm run tune -- compare --model models/trained-5v5.json --opponent-profile tuned
 ```
 
 Run each Python script from the `python/` folder (they import each other). Runs take about 5 to 15 minutes each on a 12-core laptop.
+
+## Restart support rule and pass bonus (gen5)
+
+Observed in the browser: players dribble to a shot with little passing, and at throw-ins and corners teammates stand far away. Measured: at the moment a throw-in was taken the nearest teammate was ~19 m from the ball (corner ~28 m), for the Hard AI too, because `placeRestart` left everyone where they stood and nobody moves in the restart window. The trained model holds the ball in a dribble ~52% of live ticks versus ~33% for Hard.
+
+- A pass bonus (`--pass-bonus` for full matches) of 0.05 and 0.3 did not change dribble share (55%, 54%) or strength. Reward nudges do not change this behavior.
+- New engine rule `rules.restartSupportM` (arcade: 7 m): the team awarded a throw-in or corner starts with outfield players pulled toward the ball (nearest within 7 m, next 14 m, next 21 m). Off when unset.
+- `role_sup1` (gen5): 400 iterations from gen4 under the new rule, anchors gen3 and gen4. Head to head against gen4 over 128 matches: +0.55 +/- 0.25. Promoted to `models/trained-5v5.json`; anchor `models/anchors/gen5-role_sup1.json`.
+- Still open: dribble share is unchanged (~52%).
