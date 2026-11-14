@@ -32,7 +32,7 @@ def main():
     if args.check:
         # Real observations from a short match, so the game's network can be tested against PyTorch exactly.
         from soccer_env import SoccerVecEnv
-        policy = Policy(obs_size, act_count)
+        policy = Policy(obs_size, act_count, hidden=state["body.0.weight"].shape[0])
         policy.load_state_dict(state)
         env = SoccerVecEnv(1, 1, seed=11)
         batch = env.reset()

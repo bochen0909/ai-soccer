@@ -44,7 +44,7 @@ def main():
     checkpoint = torch.load(path)
     obs_size = checkpoint["policy"]["body.0.weight"].shape[1]
     act_count = checkpoint["policy"]["act.weight"].shape[0]
-    policy = Policy(obs_size, act_count)
+    policy = Policy(obs_size, act_count, hidden=checkpoint["policy"]["body.0.weight"].shape[0])
     policy.load_state_dict(checkpoint["policy"])
     print(f"{args.checkpoint}, iteration {checkpoint.get('iteration')}, {'greedy' if args.greedy else 'sampled'} actions, held-out seeds")
     for opponent in ("default", "tuned", *(f"model:{os.path.abspath(a)}" for a in args.anchor)):

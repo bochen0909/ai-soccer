@@ -93,13 +93,15 @@ def main():
     parser.add_argument("--beta0", type=float, default=0.5, help="share of teacher actions in the first round, halved each round")
     parser.add_argument("--eval-episodes", type=int, default=2)
     parser.add_argument("--init", default=None)
+    parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     obs, mask, label, meta = load_demos(args.demos)
-    policy = Policy(meta["obsSize"], meta["actCount"])
+    hidden = torch.load(args.init)["policy"]["body.0.weight"].shape[0] if args.init else args.hidden
+    policy = Policy(meta["obsSize"], meta["actCount"], hidden=hidden)
     if args.init:
         policy.load_state_dict(torch.load(args.init)["policy"])
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr)

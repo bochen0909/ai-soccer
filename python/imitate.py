@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--rare-boost", type=float, default=40.0,
                         help="how much more often rows where the teacher acts (shoot, tackle, save, pass) are sampled")
     parser.add_argument("--eval-episodes", type=int, default=4, help="matches per evaluation environment")
+    parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args()
 
@@ -43,7 +44,7 @@ def main():
     print(f"{rows} rows from {meta['matches']} matches ({meta['teacher']} teacher, goal diff {meta['teacherGoalDiff']:.2f}); "
           f"{split} train, {rows - split} validation")
 
-    policy = Policy(d, c)
+    policy = Policy(d, c, hidden=args.hidden)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr)
     steps_per_epoch = split // args.batch
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * steps_per_epoch)

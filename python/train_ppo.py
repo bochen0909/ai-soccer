@@ -121,6 +121,7 @@ def main():
     parser.add_argument("--eval-episodes", type=int, default=1, help="matches per eval environment")
     parser.add_argument("--eval-envs", type=int, default=16,
                         help="environments per evaluation opponent, spread over 8 processes; matches per evaluation = envs x episodes")
+    parser.add_argument("--hidden", type=int, default=256, help="units per hidden layer for a new policy (--init keeps its own)")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--threads", type=int, default=2)
     args = parser.parse_args()
@@ -169,7 +170,8 @@ def main():
              for name, spec in eval_specs.items()}
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count
     T = args.rollout
-    policy = Policy(D, C).to(device)
+    hidden = torch.load(args.init)["policy"]["body.0.weight"].shape[0] if args.init else args.hidden
+    policy = Policy(D, C, hidden=hidden).to(device)
     if args.init:
         policy.load_state_dict(torch.load(args.init)["policy"])
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
