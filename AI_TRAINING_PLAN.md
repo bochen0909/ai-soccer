@@ -244,3 +244,5 @@ Observed in the browser: players dribble to a shot with little passing, and at t
 Borrowed from Google Research Football's academy: short situations where the right play is a pass. New drills `three` (3v2, one defender presses the carrier) and `counter` (counterattack from the halfway line), and `--drill-mix P` / `--drill-kinds` start a share of league episodes from a drill (ending on a goal or dead ball, max 60 steps). Evaluation stays on full matches.
 
 `role_drill1` (400 iterations from gen6, 20% drills, assist bonus 0.5, anchors gen5 and gen6) beats gen6 by 0.52 +/- 0.26 over 128 matches (W62 D36 L30) and completes about 9.7 teammate passes per match against 8.2 for gen6 and 6.6 for Hard. Promoted as gen7; anchor `models/anchors/gen7-role_drill1.json`.
+
+`role_drill2` (400 iterations from gen7, 35% drills over five kinds, anchors gen6 and gen7) beat gen7 by only 0.27 +/- 0.23 (W50 D43 L35) with about 9.1 passes per match: not a clear gain, so not promoted. More drills gave diminishing returns; gen7 stays shipped.
