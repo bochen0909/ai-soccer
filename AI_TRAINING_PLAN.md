@@ -141,6 +141,22 @@ Findings from the imitation work worth keeping:
 - The tuner still counts any remaining engine crash as a draw and reports the seeds, so one bad seed cannot kill a search.
 - Players that end up overlapping (about 0.1 m in the pile above) are not pushed apart after they stop. They separate once they move away from each other. Revisit if overlaps persist visibly.
 
+## Lessons from the league runs
+
+What we learned from league1 to league3 and the 512-unit run. Read this before starting another run.
+
+- **Measure with at least 128 matches.** A 16-match evaluation swings by 2 to 3 goals and gave misleading signals many times. 64 matches have a margin of about ±0.6, 128 about ±0.35, 256 about ±0.3. Quote nothing smaller, and judge a promotion by head to head play against the previous best model.
+- **Training reward and training evaluations are not the promotion test.** The in-run "vs tuned" numbers were far noisier than a 128-match run afterwards, and the win rates inside the league pool describe the pool, not the held-out matches.
+- **The league approach plateaued at league1.** league2 (more weight on Hard), league3 (2000 iterations) and a 512-unit network all lost or tied against league1 head to head. More iterations on the same pool is not the way forward.
+- **Longer training can make a policy worse.** In league3 the entropy rose from 0.55 to about 1.0 and the KL fell to about 0, so learning stalled. Watch entropy and KL, and stop a run when entropy rises.
+- **A wider network did not help against Hard.** big_league (512 units) was the best against the default CPU (+1.97) but lost to Hard by 3.6 goals. Size is not the bottleneck. The most likely cause is that imitation did not capture Hard's pressing and PPO did not recover it.
+- **Strength against one opponent does not carry to another.** Each model is best against what it trained on. Always evaluate against the default CPU, Hard and the previous best before promoting.
+- **Engine speed is not the bottleneck.** The engine step costs 1.6 ms (2.5 ms with a neural opponent), 8 workers scale about 5.4 times, the PPO update takes about 0.13 s on CPU, and a run reaches about 2,000 steps per second. No C++ or Rust rewrite is needed.
+- **Evaluations used to dominate run time.** `--eval-envs` (default 16) and fewer evaluations (`--eval-every 250` to 400) fix that.
+- **Anchors must be exported JSON policies, with absolute paths.** A `.pt` file or a relative path makes the environment server exit. Keep one anchor per generation in `models/anchors/` and only add a generation that was promoted.
+- **Hidden size is read from the checkpoint.** `--hidden` only applies to a new policy. With `--init` the size comes from the checkpoint, and evaluation and export do the same.
+- **Ideas not yet tried:** a per-player reward instead of one shared across the team, a different imitation teacher mix, larger DAgger rounds against Hard only, separate networks for attack and defense, and keeper and 11-a-side training.
+
 ## Ideas and open questions
 
 - **Control granularity:** shared-weight per-player policy (current choice) versus one central policy for the whole team. Parameter sharing scales better, but a central policy may coordinate better. Revisit only if per-player play looks uncoordinated.
