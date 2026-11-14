@@ -16,9 +16,9 @@ if (positionals.length < 2) { console.log("Usage: arena PLAYER PLAYER... [--matc
 const players = positionals.map((raw) => {
   const greedy = raw.startsWith("greedy:");
   const p = greedy ? raw.slice(7) : raw;
-  const base = p.endsWith(".json") ? `model:${resolve(p.replace(/^model:/, ""))}` : p.startsWith("model:") ? `model:${resolve(p.slice(6))}` : p;
+  const base = p.startsWith("params:") ? `params:${resolve(p.slice(7))}` : p.endsWith(".json") ? `model:${resolve(p.replace(/^model:/, ""))}` : p.startsWith("model:") ? `model:${resolve(p.slice(6))}` : p;
   const spec = (greedy ? "greedy:" : "") + base;
-  return { spec, name: (greedy ? "greedy " : "") + (spec.includes("model:") ? basename(spec, ".json") : spec.replace("greedy:", "")) };
+  return { spec, name: (greedy ? "greedy " : "") + (spec.includes("model:") || spec.includes("params:") ? basename(spec, ".json") : spec.replace("greedy:", "")) };
 });
 const matches = Number(values.matches);
 const seeds = Array.from({ length: matches }, (_, i) => 900_000_000 + Number(values.seed) * 100_000 + i);

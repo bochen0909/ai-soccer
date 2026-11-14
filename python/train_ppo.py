@@ -96,6 +96,7 @@ def main():
     parser.add_argument("--period-ticks", type=int, default=None, help="shorter halves, for faster episodes")
     parser.add_argument("--drill", default=None, choices=["shoot", "attack", "pass"], help="train on a short drill, not full matches")
     parser.add_argument("--max-steps", type=int, default=None, help="policy steps before an episode is cut off (drills: 60)")
+    parser.add_argument("--assist-bonus", type=float, default=0.0, help="extra reward on a goal scored within 6 s of a completed pass")
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="reward when a teammate receives a pass (drills and full matches)")
     parser.add_argument("--value-warmup", type=int, default=0,
                         help="iterations that train only the value head, so a pretrained policy is not wrecked by a random critic")
@@ -143,8 +144,8 @@ def main():
         options["reward"] = {"possession": 0.0, "passCompleted": args.pass_bonus}
     elif args.max_steps:
         options["maxSteps"] = args.max_steps
-    if args.pass_bonus and not args.drill:
-        options["reward"] = {"passCompleted": args.pass_bonus}
+    if (args.pass_bonus or args.assist_bonus) and not args.drill:
+        options["reward"] = {"passCompleted": args.pass_bonus, "assist": args.assist_bonus}
     run_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", args.name)
     os.makedirs(run_dir, exist_ok=True)
 

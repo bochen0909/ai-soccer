@@ -232,3 +232,9 @@ Observed in the browser: players dribble to a shot with little passing, and at t
 - New engine rule `rules.restartSupportM` (arcade: 7 m): the team awarded a throw-in or corner starts with outfield players pulled toward the ball (nearest within 7 m, next 14 m, next 21 m). Off when unset.
 - `role_sup1` (gen5): 400 iterations from gen4 under the new rule, anchors gen3 and gen4. Head to head against gen4 over 128 matches: +0.55 +/- 0.25. Promoted to `models/trained-5v5.json`; anchor `models/anchors/gen5-role_sup1.json`.
 - Still open: dribble share is unchanged (~52%).
+
+## Sparring variants and the assist reward (gen6)
+
+- Five Hard-AI variants (more pressing, wider, dribbling, short passing, risky; `tuning/variants/`, local) all lose to gen5 by about 4 goals a match (41 to 47 wins of 48). They add only easy opponents, so no league run was made with them. `arena` now accepts `params:<path>`.
+- New reward `assist` (`--assist-bonus`): added to a goal scored within 6 s of a teammate receiving a pass. `role_assist1` (400 iterations from gen5, bonus 0.5) beats gen5 by 0.45 +/- 0.26 over 128 matches. Promoted as gen6; anchor `models/anchors/gen6-role_assist1.json`.
+- Passing is not rarer than for Hard: roughly 8 completed teammate passes per match for gen5 and gen6 against about 6.6 for Hard, although the dribble share of live ticks stays ~52 to 54% against ~29 to 33%. The model carries the ball longer between passes, rather than not passing.

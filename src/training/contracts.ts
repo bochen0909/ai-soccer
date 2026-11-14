@@ -52,6 +52,8 @@ export interface RewardWeights {
   possession: number;
   /** A teammate receives a kick from another teammate. Can be farmed by passing back and forth, so keep it for drills. */
   passCompleted: number;
+  /** Added to a goal the learner scores within six seconds of a teammate receiving a pass. Cannot be farmed. */
+  assist: number;
 }
 
 export interface TrainingEnvOptions {

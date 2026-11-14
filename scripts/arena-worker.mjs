@@ -19,6 +19,10 @@ function team(spec, registry, id) {
     registerNeuralNetwork(registry, networkFor(spec.slice(6)), id);
     return { pluginId: id };
   }
+  if (spec.startsWith("params:")) {
+    const data = JSON.parse(readFileSync(spec.slice(7), "utf8"));
+    return { pluginId: "baseline", config: structuredClone(data.config ?? data.best?.config ?? data) };
+  }
   if (!Object.hasOwn(AI_PROFILES, spec)) throw new Error(`Unknown player ${spec}`);
   return profileTeamOptions(spec);
 }
