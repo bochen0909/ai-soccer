@@ -153,9 +153,14 @@ Results, 128 shared-seed matches per pair, sides alternating (`npm run arena`):
 | --- | --- | --- | --- |
 | league1 (old shipped) | -0.30 +/- 0.66 (64 matches) | +1.67 | |
 | dagger_role (imitation only, 16 DAgger rounds) | -1.73 +/- 0.47 | +2.61 | +0.63 +/- 0.35 |
-| **role_league1 (dagger_role + 500 league iterations)** | **+3.48 +/- 0.46** (111 W, 8 D, 9 L) | **+4.28 +/- 0.38** | **+3.91 +/- 0.42** |
+| role_league1 (dagger_role + 500 league iterations) | +3.48 +/- 0.46 (111 W, 8 D, 9 L) | +4.28 +/- 0.38 | +3.91 +/- 0.42 |
+| **role_league2 (gen4, shipped: role_league1 + 600 league iterations, anchors gen2 and gen3)** | **+4.46 +/- 0.43** (121 W, 4 D, 3 L) | **+4.38 +/- 0.35** | **+0.99 +/- 0.24 against role_league1** |
+| role_league3 (gen5, 600 more iterations, anchors gen2 to gen4) | +5.01 +/- 0.43 | +4.70 +/- 0.44 | +0.05 +/- 0.26 against gen4, so not promoted |
+| role512_league1 (512 units, 30 DAgger rounds, 600 league iterations) | +1.12 +/- 0.44 | | -3.67 +/- 0.35 against gen4 |
 
-role_league1 is now `models/trained-5v5.json`; the previous model stays in `models/anchors/` as an opponent. Recipe: record demos, `dagger.py --name dagger_role`, then `train_ppo.py` with `--league-anchor models/trained-5v5.json --value-warmup 10 --iterations 500 --lr 1e-4 --clip 0.1 --entropy 0.001 --tuned-boost 2`.
+role_league2 (gen4) is now `models/trained-5v5.json`; every shipped generation stays in `models/anchors/` as an opponent. Recipe: record demos, `dagger.py --name dagger_role`, then `train_ppo.py` with `--league-anchor models/trained-5v5.json --value-warmup 10 --iterations 500 --lr 1e-4 --clip 0.1 --entropy 0.001 --tuned-boost 2`.
+
+The league gain repeated once (gen3 to gen4) and then plateaued again (gen4 to gen5 is a tie), and a wider network trained from a longer DAgger run was much worse. The next bottleneck is no longer the teacher gap: gen4 already beats Hard by more than 4 goals, and the only opponents left that can beat it are its own ancestors. Ideas for the next round: a stronger or more varied sparring pool (tuned variants with random traits, exploiters trained against gen4, ability randomization), a per-player reward, and 11-a-side.
 
 Other findings from this round:
 
