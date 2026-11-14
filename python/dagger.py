@@ -79,7 +79,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--demos", default="demos/tuned")
     parser.add_argument("--name", default="dagger1")
-    parser.add_argument("--teacher", default="tuned", choices=["default", "tuned"])
+    parser.add_argument("--teacher", default="tuned", help="default, tuned, or params:<absolute path to a tuned parameters file>")
     parser.add_argument("--rounds", type=int, default=8)
     parser.add_argument("--rollout-steps", type=int, default=600, help="policy steps per environment each round")
     parser.add_argument("--processes", type=int, default=4, help="Node processes per opponent profile")

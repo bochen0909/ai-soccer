@@ -34,7 +34,7 @@ test('observations have the documented size, finite values and sensible scale', 
   const env = new SoccerTrainingEnv({ config: shortConfig() });
   const result = env.reset(3, liveScenario(env.config ?? shortConfig()));
   assert.equal(result.observation.length, env.agentCount * env.layout.size);
-  assert.equal(env.layout.size, 63 + 21 * 5);
+  assert.equal(env.layout.size, 63 + 21 * 5 + 23 + 5);
   for (const value of result.observation) assert.ok(Number.isFinite(value) && Math.abs(value) <= 5, `value ${value}`);
   assert.deepEqual([...result.agentMask], [1, 1, 1, 1, 1]);
 });
@@ -189,7 +189,7 @@ test('eleven-a-side matches work with a padded policy interface', () => {
   const env = new SoccerTrainingEnv({ config: shortConfig(createElevenAsideConfig()) });
   const result = env.reset(8);
   assert.equal(env.agentCount, 11);
-  assert.equal(env.layout.size, 63 + 21 * 11);
+  assert.equal(env.layout.size, 63 + 21 * 11 + 23 + 11);
   assert.equal(result.agentMask.reduce((sum, value) => sum + value, 0), 11);
   env.step(idle(env));
 });

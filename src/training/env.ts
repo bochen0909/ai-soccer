@@ -80,7 +80,7 @@ export class SoccerTrainingEnv {
     this.registry = options.registry ?? createDefaultAIRegistry();
     this.registry.register("external", () => (this.external = new ExternalTeamAI()));
     this.session = new MatchSession(this.registry, this.engine);
-    this.layout = createObservationLayout(maxPlayers);
+    this.layout = createObservationLayout(maxPlayers, options.roleFeatures !== false);
     this.actionSpace = createActionSpace(maxPlayers);
   }
 

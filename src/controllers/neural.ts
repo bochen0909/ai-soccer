@@ -3,7 +3,7 @@ import { decodeAction, writeActionMask } from "../training/actions.js";
 import { buildRosterContexts } from "../training/agents.js";
 import { createActionSpace } from "../training/contracts.js";
 import type { ActionSpace } from "../training/contracts.js";
-import { createObservationLayout, FEEDBACK_STATUSES, writeObservation } from "../training/observation.js";
+import { createObservationLayout, FEEDBACK_STATUSES, layoutFromSize, writeObservation } from "../training/observation.js";
 import type { AIContext, ControlAssignment, PlayerIntent, TeamAI, TeamDecisionContext } from "./contracts.js";
 import { TeamAIRegistry } from "./registry.js";
 
@@ -143,12 +143,10 @@ export class NeuralTeamAI implements TeamAI {
 
   constructor(private readonly network: Network, id = "neural") {
     this.id = id;
-    const rosterSize = (network.obsSize - 63) / 21;
-    if (!Number.isInteger(rosterSize) || rosterSize < 1) {
-      throw new RangeError("Policy input size does not match any roster size");
-    }
-    this.layout = createObservationLayout(rosterSize);
-    this.space = createActionSpace(rosterSize);
+    const shape = layoutFromSize(network.obsSize);
+    if (!shape) throw new RangeError("Policy input size does not match any roster size");
+    this.layout = createObservationLayout(shape.maxPlayers, shape.withRole);
+    this.space = createActionSpace(shape.maxPlayers);
   }
 
   reset(context: AIContext): void {

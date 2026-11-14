@@ -7,7 +7,7 @@ Working notes on how we get from the current baseline AI to a trained one. Updat
 - Engine, headless runner, replay and `evaluate` (match, verify, benchmark) exist.
 - The baseline AI (`BaselineTeamAI`) is the reference opponent.
 - The training adapter is built: `SoccerTrainingEnv` in `src/training/` (observation encoder, action decoder and masks, reward, reset and step). Its tests are in `test/training.test.mjs`.
-- Nothing has been trained or tuned yet. The reward and observation design are untested against a learning signal.
+- A trained 5v5 policy ships in `models/trained-5v5.json`. It beats Hard and the default CPU on held-out seeds (see "Role features broke the plateau").
 
 ## Guiding principle
 
@@ -140,6 +140,30 @@ Findings from the imitation work worth keeping:
 - **Fixed:** the physics engine threw `Physics exceeded its collision event limit` when several players piled up against a wall (seed 100050 at 5v5, tick 2959). The wall acts like an infinitely heavy body, so contacts between the stacked players traded zero-time impulses forever. The fallback in `src/engine/physics.ts` stops the jammed players, as an inelastic pile-up would, and only throws if the same substep overruns again. A regression test is in `test/headless.test.mjs`. Seeds 100000 to 100119 now all complete.
 - The tuner still counts any remaining engine crash as a draw and reports the seeds, so one bad seed cannot kill a search.
 - Players that end up overlapping (about 0.1 m in the pile above) are not pushed apart after they stop. They separate once they move away from each other. Revisit if overlaps persist visibly.
+
+## Role features broke the plateau (gen3)
+
+The league runs stalled because the student never imitated Hard well. Pure DAgger reached only +1 against the default CPU where Hard scores +7.7, and its loss stayed near 0.7. The cause is that the teacher is a team coordinator, not a per-player rule: it picks one chaser by comparing every teammate's interception time, assigns markers by greedy matching, and moves toward a mode-dependent formation anchor. A shared-weight MLP that sees one raw snapshot has to rediscover all of that for every player.
+
+The fix is a trailing **role block** in each observation row (`analyzeRoles` in `src/controllers/baseline.ts`, written by `src/training/observation.ts`): attack/defend/loose mode, whether the player is the chaser, its interception time, rank and gap, the interception point, the walking destination (chase, mark or anchor), sprint hint, and for the carrier the shot target, shot clearance, range ratio, pressure, forward lane and best pass slot. Observation size is now 63 + 21n + 23 + n (196 at 5v5); older policies are still read through `layoutFromSize`, and `roleFeatures: false` gives the old layout.
+
+Results, 128 shared-seed matches per pair, sides alternating (`npm run arena`):
+
+| Model | vs Hard | vs default | vs previous best (league1) |
+| --- | --- | --- | --- |
+| league1 (old shipped) | -0.30 +/- 0.66 (64 matches) | +1.67 | |
+| dagger_role (imitation only, 16 DAgger rounds) | -1.73 +/- 0.47 | +2.61 | +0.63 +/- 0.35 |
+| **role_league1 (dagger_role + 500 league iterations)** | **+3.48 +/- 0.46** (111 W, 8 D, 9 L) | **+4.28 +/- 0.38** | **+3.91 +/- 0.42** |
+
+role_league1 is now `models/trained-5v5.json`; the previous model stays in `models/anchors/` as an opponent. Recipe: record demos, `dagger.py --name dagger_role`, then `train_ppo.py` with `--league-anchor models/trained-5v5.json --value-warmup 10 --iterations 500 --lr 1e-4 --clip 0.1 --entropy 0.001 --tuned-boost 2`.
+
+Other findings from this round:
+
+- **Iterated tuning against Hard** (`tuning/search-vs-hard-seed2.json`, 16 generations) only reached about parity with Hard. The 10-parameter space is saturated near Hard, so it is not a stronger teacher.
+- **An exploiter** (league1 fine-tuned against league1 only, `--exploit`) beat league1 by +0.73 +/- 0.35 but lost to Hard by 0.89. Training against one opponent gives a cycle, not progress.
+- **Greedy play** is within noise of sampled play (+0.25 +/- 0.33), so the exported policy keeps sampling.
+- A centralized critic was not tried: every row already contains the whole match, so the value head sees the full state.
+- `npm run arena -- PLAYER...` compares any mix of `default`, `tuned`, `model:PATH` and `greedy:` players on shared seeds with a rating table. Use it for every promotion.
 
 ## Lessons from the league runs
 

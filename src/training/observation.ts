@@ -2,6 +2,7 @@ import type { ActionResult, AttackDirection, TeamObservation } from "../contract
 import type { ObservationLayout } from "./contracts.js";
 import { clamp, laneClearance, toPolicy } from "./geometry.js";
 import type { AgentContext } from "./actions.js";
+import { analyzeRoles } from "../controllers/baseline.js";
 
 type PlayerState = TeamObservation["players"][number];
 
@@ -18,12 +19,27 @@ export const EGO_INDEX = {
   goalOffsetX: 36, goalOffsetY: 37, goalDistance: 38,
 } as const;
 
-export function createObservationLayout(maxPlayers: number): ObservationLayout {
+/** Fixed part of the role block; one more value per roster slot (the best pass receiver) follows. */
+const ROLE_FIXED = 23;
+
+/** `withRole` adds the trailing block of derived team-role features. Policies trained before it exists use false. */
+export function createObservationLayout(maxPlayers: number, withRole = true): ObservationLayout {
+  const role = withRole ? ROLE_FIXED + maxPlayers : 0;
   return {
     ego: EGO_SIZE, ball: BALL_SIZE, match: MATCH_SIZE,
-    teammateSlot: TEAMMATE_SLOT, opponentSlot: OPPONENT_SLOT, maxPlayers,
-    size: EGO_SIZE + BALL_SIZE + MATCH_SIZE + (TEAMMATE_SLOT + OPPONENT_SLOT) * maxPlayers,
+    teammateSlot: TEAMMATE_SLOT, opponentSlot: OPPONENT_SLOT, maxPlayers, role,
+    size: EGO_SIZE + BALL_SIZE + MATCH_SIZE + (TEAMMATE_SLOT + OPPONENT_SLOT) * maxPlayers + role,
   };
+}
+
+/** Roster size and whether the role block is present, from a policy's input size. */
+export function layoutFromSize(size: number): { maxPlayers: number; withRole: boolean } | undefined {
+  for (const withRole of [false, true]) {
+    for (let maxPlayers = 1; maxPlayers <= 12; maxPlayers += 1) {
+      if (createObservationLayout(maxPlayers, withRole).size === size) return { maxPlayers, withRole };
+    }
+  }
+  return undefined;
 }
 
 /** Status codes for the previous policy step's action feedback. */
@@ -167,6 +183,34 @@ export function writeObservation(
       clamp(Math.hypot(relative.x, relative.y) / pitch.lengthM, 0, 1),
       clamp(Math.hypot(foe.position.x - ball.position.x, foe.position.y - ball.position.y) / pitch.lengthM, 0, 1),
     );
+  }
+  if (layout.role > 0) {
+    const info = analyzeRoles(observation, attack, team, opponents).get(ego.playerId);
+    const off = (point: { x: number; y: number }) => {
+      const local = toPolicy({ x: point.x - ego.position.x, y: point.y - ego.position.y }, attack);
+      return { x: local.x / pitch.lengthM, y: local.y / pitch.lengthM };
+    };
+    if (!info) {
+      row.skip(layout.role);
+    } else {
+      row.oneHot(["attack", "defend", "loose"].indexOf(info.mode), 3);
+      row.put(info.chaser ? 1 : 0, clamp(info.eta / 3, 0, 2), info.etaRank, clamp(info.etaGap / 2, 0, 2));
+      const intercept = off(info.intercept);
+      const destination = off(info.destination);
+      row.put(intercept.x, intercept.y, destination.x, destination.y, Math.hypot(destination.x, destination.y));
+      row.put(info.sprint ? 1 : 0, info.hasMark ? 1 : 0);
+      const carrier = info.carrier;
+      if (carrier) {
+        const shot = off(carrier.shotTarget);
+        row.put(1, shot.x, shot.y, clamp(carrier.shotClearance / 4, -1, 1), carrier.shotDistance / pitch.lengthM,
+          clamp(carrier.shotDistance / Math.max(1, carrier.shotRange), 0, 2) / 2, clamp(carrier.pressure / 10, 0, 1),
+          clamp(carrier.forwardLane / 4, -1, 1), clamp(carrier.passScore / 3, -1, 1));
+        const slot = team.findIndex((mate) => mate.playerId === carrier.passReceiverId);
+        row.oneHot(slot, layout.maxPlayers);
+      } else {
+        row.skip(9 + layout.maxPlayers);
+      }
+    }
   }
   row.close();
 }

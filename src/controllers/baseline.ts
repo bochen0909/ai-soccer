@@ -467,3 +467,141 @@ export class BaselineTeamAI implements TeamAI {
     });
   }
 }
+
+/** What the baseline's team logic would assign one player right now. Used as extra observation features. */
+export interface RoleInfo {
+  mode: Mode;
+  /** The player is the team's designated ball chaser (not in attack mode). */
+  chaser: boolean;
+  /** Seconds to reach the ball's predicted path, for outfield players when the team does not hold the ball. */
+  eta: number;
+  /** 0 for the fastest teammate, 1 for the slowest. */
+  etaRank: number;
+  /** Seconds slower than the fastest teammate. */
+  etaGap: number;
+  intercept: Vec2;
+  /** Where the baseline would walk: the interception point, the marking spot or the formation anchor. */
+  destination: Vec2;
+  sprint: boolean;
+  hasMark: boolean;
+  /** Set for the ball carrier only. */
+  carrier?: {
+    shotTarget: Vec2;
+    shotClearance: number;
+    shotDistance: number;
+    shotRange: number;
+    pressure: number;
+    forwardLane: number;
+    passScore: number;
+    passReceiverId?: PlayerId;
+  };
+}
+
+/** Settings of the "tuned" profile, which is the teacher the role features describe. */
+const ROLE_CONFIG = {
+  aggression: 0.955, riskTolerance: 0.616, awareness: 0.764,
+  passLane: 0.328, passSpace: 0.512, passProgress: 2.815, passRange: 1.099,
+  shotRange: 0.571, dribbleAhead: 0.656, pressureRadius: 0.501,
+};
+const ROLE_TRAITS: Traits = {
+  aggression: ROLE_CONFIG.aggression, riskTolerance: ROLE_CONFIG.riskTolerance, awareness: ROLE_CONFIG.awareness,
+};
+const ROLE_WEIGHTS = Object.fromEntries(
+  (Object.keys(DEFAULT_WEIGHTS) as (keyof Weights)[]).map((name) => [name, ROLE_CONFIG[name]]),
+) as unknown as Weights;
+
+const roleCache = new WeakMap<object, Map<string, Map<PlayerId, RoleInfo>>>();
+
+/**
+ * Re-derives the baseline's team decisions (chaser by interception time, markers, formation anchors, the carrier's
+ * shot and pass options) from one observation, for the team whose players are `team`. Stateless, so the chaser's
+ * hysteresis is not modelled, and a pass in flight is not known. Results are cached per observation.
+ */
+export function analyzeRoles(
+  observation: TeamObservation, attack: AttackDirection, team: readonly PlayerState[], opponents: readonly PlayerState[],
+): Map<PlayerId, RoleInfo> {
+  const key = `${attack}:${team[0]?.teamId}`;
+  const cached = roleCache.get(observation)?.get(key);
+  if (cached) return cached;
+  const tactics: Tactics = {
+    world: observation, attack, teammates: team, opponents, traits: ROLE_TRAITS, weights: ROLE_WEIGHTS,
+    fullSide: team.length === 11,
+  };
+  const { ball } = observation;
+  const teamId = team[0]?.teamId;
+  const ownerId = ball.control.kind === "free" ? undefined : ball.control.playerId;
+  const owner = observation.players.find((player) => player.playerId === ownerId);
+  const mode: Mode = !owner ? "loose" : owner.teamId === teamId ? "attack" : "defend";
+  const outfield = team.filter((player) => player.definition.role === "outfield");
+  const arrivals = new Map<PlayerId, { target: Vec2; eta: number }>();
+  for (const player of outfield) arrivals.set(player.playerId, interception(tactics, player));
+  const ranked = [...outfield].sort((a, b) => arrivals.get(a.playerId)!.eta - arrivals.get(b.playerId)!.eta);
+  const chases = mode !== "attack" && ball.control.kind !== "keeperHeld" && ranked.length > 0;
+  const chaser = chases ? ranked[0] : undefined;
+  const fastest = chaser ? arrivals.get(chaser.playerId)!.eta : 0;
+
+  const marks = opponents.filter((player) => player.definition.role === "outfield" && player.playerId !== ownerId);
+  const markerById = new Map<PlayerId, PlayerState>();
+  if (mode === "defend") {
+    for (const defender of outfield) {
+      if (defender.playerId === chaser?.playerId || marks.length === 0) continue;
+      const anchor = formation(tactics, defender, mode);
+      let closest = 0;
+      for (let i = 1; i < marks.length; i += 1) {
+        if (distance(anchor, marks[i].position) < distance(anchor, marks[closest].position)) closest = i;
+      }
+      markerById.set(defender.playerId, marks.splice(closest, 1)[0]);
+    }
+  }
+
+  const result = new Map<PlayerId, RoleInfo>();
+  for (const player of team) {
+    const arrival = arrivals.get(player.playerId) ?? { target: ball.position, eta: 0 };
+    const rank = Math.max(0, ranked.findIndex((entry) => entry.playerId === player.playerId));
+    const isChaser = chaser?.playerId === player.playerId;
+    const anchor = formation(tactics, player, mode);
+    const mark = markerById.get(player.playerId);
+    const markWeight = tactics.fullSide ? 0.28 : 0.52;
+    const destination = isChaser ? arrival.target
+      : mark ? onPitch(tactics, {
+        x: (1 - markWeight) * anchor.x + markWeight * (mark.position.x - 1.5 * attack),
+        y: (1 - markWeight) * anchor.y + markWeight * mark.position.y,
+      }) : anchor;
+    const info: RoleInfo = {
+      mode, chaser: isChaser, eta: arrival.eta, etaRank: ranked.length > 1 ? rank / (ranked.length - 1) : 0,
+      etaGap: chases ? arrival.eta - fastest : 0, intercept: arrival.target, destination,
+      sprint: isChaser && distance(player.position, arrival.target) > 3.5 - ROLE_TRAITS.aggression,
+      hasMark: mark !== undefined,
+    };
+    if (ownerId === player.playerId && ball.control.kind === "dribble") info.carrier = carrierInfo(tactics, player);
+    result.set(player.playerId, info);
+  }
+  let byKey = roleCache.get(observation);
+  if (!byKey) { byKey = new Map(); roleCache.set(observation, byKey); }
+  byKey.set(key, result);
+  return result;
+}
+
+function carrierInfo(tactics: Tactics, player: PlayerState): NonNullable<RoleInfo["carrier"]> {
+  const { ball, pitch } = tactics.world;
+  const origin = ball.position;
+  const goalX = tactics.attack * pitch.lengthM / 2;
+  const side = origin.y >= 0 ? 1 : -1;
+  let shotTarget: Vec2 = { x: goalX, y: -side * pitch.goalWidthM * 0.29 };
+  let shotClearance = laneClearance(origin, shotTarget, tactics.opponents);
+  for (const y of [side * pitch.goalWidthM * 0.29, 0]) {
+    const candidate = { x: goalX, y };
+    const open = laneClearance(origin, candidate, tactics.opponents);
+    if (open > shotClearance) { shotTarget = candidate; shotClearance = open; }
+  }
+  const shotRange = (6 + player.definition.abilities.technical.shooting * 11) * (0.8 + tactics.traits.riskTolerance * 0.4) *
+    tactics.weights.shotRange;
+  const target = onPitch(tactics, { x: origin.x + tactics.attack * 6 * tactics.weights.dribbleAhead, y: origin.y * 0.63 });
+  const passSpeed = player.definition.abilities.physical.maxKickSpeedMps * 0.55;
+  const pass = passingOption(tactics, player, origin, Math.min(tactics.fullSide ? 26 : 19, passSpeed ** 2 * 0.23));
+  return {
+    shotTarget, shotClearance, shotDistance: distance(origin, shotTarget), shotRange,
+    pressure: nearestDistance(origin, tactics.opponents, 10), forwardLane: laneClearance(origin, target, tactics.opponents),
+    passScore: pass?.score ?? -3, passReceiverId: pass?.receiverId,
+  };
+}

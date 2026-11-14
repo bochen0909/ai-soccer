@@ -102,6 +102,11 @@ def main():
     parser.add_argument("--league-anchor", nargs="+", default=None,
                         help="one or more policy JSON files to keep as fixed league opponents, e.g. one per generation; "
                              "turns on league training against the CPUs, these anchors, and snapshots of the policy itself")
+    parser.add_argument("--league-params", nargs="+", default=None,
+                        help="tuned parameter files (from `tune search`) to add as fixed baseline opponents; turns on league training")
+    parser.add_argument("--exploit", action="store_true",
+                        help="league: train only against the anchors (and snapshots), not the CPUs, to find the anchors' weaknesses; "
+                             "the CPUs are still used for evaluation")
     parser.add_argument("--tuned-boost", type=float, default=1.0,
                         help="league: multiplies how often the tuned (Hard) CPU is drawn, on top of the win-rate weighting")
     parser.add_argument("--snapshot-every", type=int, default=25, help="league: iterations between snapshots of the policy")
@@ -152,17 +157,20 @@ def main():
         return [{"id": key, "spec": entry["spec"], "weight": weights[key]} for key, entry in league.items()]
 
     eval_specs = {"default": "default", "tuned": "tuned"}
-    if args.league_anchor:
-        if len(args.league_anchor) > 8:
+    if args.league_anchor or args.league_params:
+        anchors = [("anchor_" + os.path.splitext(os.path.basename(p))[0], "model:" + os.path.abspath(p)) for p in args.league_anchor or []]
+        anchors += [("params_" + os.path.splitext(os.path.basename(p))[0], "params:" + os.path.abspath(p)) for p in args.league_params or []]
+        if len(anchors) > 8:
             raise SystemExit("at most 8 anchors (pool IDs 2 to 9; snapshots start at 10)")
         entries = [(0, "default", "default"), (1, "tuned", "tuned")]
-        for index, path in enumerate(args.league_anchor):
-            name = "anchor_" + os.path.splitext(os.path.basename(path))[0]
-            entries.append((2 + index, name, "model:" + os.path.abspath(path)))
+        for index, (name, spec) in enumerate(anchors):
+            entries.append((2 + index, name, spec))
         for key, name, spec in entries:
             league[key] = {"name": name, "spec": spec, "rate": 0.5, "snapshot": None}
             if key >= 2:
                 eval_specs[name] = spec
+        if args.exploit:
+            del league[0], league[1]
         options["pool"] = pool_message()
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
     eval_shape = (8, max(1, args.eval_envs // 8))

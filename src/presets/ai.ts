@@ -20,10 +20,10 @@ export interface AIProfile {
  * default profile (about +6 goals per match on held-out seeds, 297 wins in 300). It presses hard and shoots from
  * close range, and has not been tuned or checked for 11-a-side.
  *
- * "trained" is a neural network trained by imitating the tuned profile, correcting with DAgger and fine-tuning with
- * PPO (see python/ and AI_TRAINING_PLAN.md). It runs as the "neural" plugin, which must be registered with the
- * weights in models/trained-5v5.json first. Over 64 held-out 5-a-side matches it scored about +1.4 to +1.5 goals per
- * match against the default profile and from even to half a goal behind the tuned one (league PPO, see the plan).
+ * "trained" is a neural network trained by imitating the tuned profile (with team-role features), correcting with DAgger and
+ * fine-tuning with PPO (see python/ and AI_TRAINING_PLAN.md). It runs as the "neural" plugin, which must be registered with the
+ * weights in models/trained-5v5.json first. Over 128 held-out 5-a-side matches it scored about +4.3 goals per match
+ * against the default profile and +3.5 against the tuned one (role features, DAgger and league PPO, see the plan).
  */
 export const AI_PROFILES: Readonly<Record<AIProfileId, AIProfile>> = {
   default: { id: "default", label: "Default", tunedFor: "any", config: {} },

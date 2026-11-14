@@ -14,7 +14,8 @@
     "play": "npm run build && node scripts/serve-match.mjs",
     "evaluate": "npm run --silent build && node scripts/evaluate.mjs",
     "tune": "npm run --silent build && node scripts/tune.mjs",
-    "check-env": "npm run --silent build && node scripts/check-env.mjs"
+    "check-env": "npm run --silent build && node scripts/check-env.mjs",
+    "arena": "npm run --silent build && node scripts/arena.mjs"
   },
   "devDependencies": {
     "typescript": "5.7.3"

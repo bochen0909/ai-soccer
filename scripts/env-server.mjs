@@ -6,7 +6,7 @@
 //   3 STEP  body int32[envs * agents * 3] -> 131 binary step payload
 //   4 CLOSE
 //   5 SET_POOL body JSON [{id, spec, weight}] (no reply): the opponents later episodes are drawn from, by weight.
-//     A spec is "default", "tuned" or "model:<path to a policy JSON file>".
+//     A spec is "default", "tuned", "params:<path to a tuned parameters file>" or "model:<path to a policy JSON file>".
 // Step payload, each section padded to 4 bytes: obs f32[E*A*D], mask u8[E*A*ACT], agentMask u8[E*A],
 // reward f32[E], done u8[E], score i32[E*2] (own, opponent; valid when done), steps i32[E] (length of the ended episode,
 // or -1 when the engine failed and the episode was dropped), opponent i32[E] (pool ID of the ended episode's
@@ -32,6 +32,13 @@ function networkFor(path) {
   return networks.get(path);
 }
 
+/** Baseline settings for a profile name, or for "params:<path>" a tuned parameters file (as written by `tune search`). */
+function baselineConfig(name) {
+  if (!name.startsWith("params:")) return structuredClone(AI_PROFILES[name].config);
+  const data = JSON.parse(readFileSync(name.slice("params:".length), "utf8"));
+  return structuredClone(data.config ?? data.best?.config ?? data);
+}
+
 function makeEnv(options, learnerTeamId, spec) {
   const config = options.size === 11 ? createElevenAsideConfig() : createArcadeConfig();
   if (options.periodTicks) config.periodTicks = [options.periodTicks, options.periodTicks];
@@ -41,12 +48,12 @@ function makeEnv(options, learnerTeamId, spec) {
     registerNeuralNetwork(registry, networkFor(spec.slice("model:".length)), "neural");
     opponent = { pluginId: "neural" };
   } else {
-    opponent = profileTeamOptions(spec);
+    opponent = spec.startsWith("params:") ? { pluginId: "baseline", config: baselineConfig(spec) } : profileTeamOptions(spec);
   }
   return new SoccerTrainingEnv({
     config, learnerTeamId, opponent, registry,
     ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward,
-    maxPlayersPerTeam: options.maxPlayersPerTeam, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall,
+    maxPlayersPerTeam: options.maxPlayersPerTeam, roleFeatures: options.roleFeatures, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall,
   });
 }
 
@@ -106,7 +113,7 @@ function begin(slot, seed) {
     slot.teacher = new BaselineTeamAI();
     slot.teacher.reset({
       teamId: slot.current.learnerTeamId, teamIndex: slot.side, players: slot.current.config.teams[slot.side].players,
-      config: structuredClone(AI_PROFILES[teacher].config), contractVersion: 1, seed: 0,
+      config: baselineConfig(teacher), contractVersion: 1, seed: 0,
     });
   }
   for (let attempt = 0; ; attempt += 1) {
