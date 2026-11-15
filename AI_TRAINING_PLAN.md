@@ -282,3 +282,7 @@ New reward `turnover` (`--turnover-bonus`): +w when the last touch of the ball p
 
 - Heading is not supported by the engine (no head-ball action, no aerial contact). Kept for a future improvement; it would change the model's output and restart the lineage.
 - The goalkeeper is the clearest weakness: gen9 made 0 saves in 30 matches against Hard (about 16 attempts in 20 matches, almost all missed), while the Hard AI's keeper saves about 31% of shots on target. The `keeper` drill was added to train it; to be mixed in from gen11.
+
+## Generation 10 (role_gen10)
+
+Init from gen9, 800 iterations (double), mix adds giveandgo and rondo drills and the merged failure set (430 states). Head to head vs gen9, 128 matches each: gen9 lost by 0.95 (W24 D31 L73) on seed 1 and by 1.20 (W23 D22 L83) on seed 2. Promoted. Passes per match 8.2 (gen9 9.2), dribble share of live ticks 0.39 (gen9 about 0.50). Keeper drill still not in a run; planned for gen11.
