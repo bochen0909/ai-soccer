@@ -246,3 +246,15 @@ Borrowed from Google Research Football's academy: short situations where the rig
 `role_drill1` (400 iterations from gen6, 20% drills, assist bonus 0.5, anchors gen5 and gen6) beats gen6 by 0.52 +/- 0.26 over 128 matches (W62 D36 L30) and completes about 9.7 teammate passes per match against 8.2 for gen6 and 6.6 for Hard. Promoted as gen7; anchor `models/anchors/gen7-role_drill1.json`.
 
 `role_drill2` (400 iterations from gen7, 35% drills over five kinds, anchors gen6 and gen7) beat gen7 by only 0.27 +/- 0.23 (W50 D43 L35) with about 9.1 passes per match: not a clear gain, so not promoted. More drills gave diminishing returns; gen7 stays shipped.
+
+## Ball progress reward ablation
+
+Same recipe as gen7 (from gen6, 20% drills, assist 0.5, 400 iterations) with `--progress` 0.03 and 0, against gen7 (0.1), 128 matches each:
+
+| progress | vs gen7 | passes per match | dribble share |
+|---|---|---|---|
+| 0.03 | gen7 -0.16 +/- 0.23 (W37 D44 L47) | 8.5 | 55% |
+| 0 | gen7 +0.02 +/- 0.23 (W45 D39 L44) | 9.2 | 56% |
+| 0.1 (gen7) | - | 9.7 | 58% |
+
+No measurable effect on strength or on dribbling. The term neither helps nor hurts at this stage, so it was left at 0.1 and gen7 stays shipped. Goals and the assist bonus carry the learning.
