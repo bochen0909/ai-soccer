@@ -175,6 +175,9 @@ function validateConfig(config: MatchConfig, seed: number): void {
   if (rules.restartSupportM !== undefined) {
     inRange(rules.restartSupportM, 0, Math.hypot(pitch.lengthM, pitch.widthM), "configuration", "rules.restartSupportM");
   }
+  if (rules.headerContact !== undefined) {
+    check(typeof rules.headerContact === "boolean", "configuration", "rules.headerContact", "expected a boolean");
+  }
   inRange(rules.restartExclusionM, 0, Math.hypot(pitch.lengthM, pitch.widthM),
     "configuration", "rules.restartExclusionM");
 

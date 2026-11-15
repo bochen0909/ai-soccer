@@ -239,8 +239,8 @@ test('drills build valid situations that play out the same from either side', ()
   for (const kind of DRILL_KINDS) {
     const [home, away] = [play(kind, 'home'), play(kind, 'away')];
     const loose = kind !== 'shoot' && kind !== 'attack';
-    // The give-and-go starts with a presser in contact range, so its length can differ by side; it must still play out.
-    if (kind !== 'giveandgo') assert.deepEqual(loose ? coarse(home) : home, loose ? coarse(away) : away);
+    // These start with a defender close to the ball, so their length can differ by side; they must still play out.
+    if (!['giveandgo', 'cross', 'lob'].includes(kind)) assert.deepEqual(loose ? coarse(home) : home, loose ? coarse(away) : away);
   }
 });
 
@@ -272,4 +272,28 @@ test('drills never place players on top of each other, whatever the seed', () =>
       env.reset(seed, createDrill(kind, config, seed % 2 === 0 ? 0 : 1, seed));
     }
   }
+});
+
+test('a ball arriving at head height is headed on only when the rule is on', async () => {
+  const { MatchSession, createDefaultAIRegistry } = await import('../dist/index.js');
+  const run = (headerContact) => {
+    const config = createArcadeConfig();
+    config.rules.headerContact = headerContact;
+    const scenario = liveScenario(config, { x: 0, y: 0 });
+    const target = scenario.players.find((player) => player.playerId === 'home-3');
+    target.position = { x: 0, y: 0 };
+    scenario.ball.position = { x: -2.5, y: 0, z: 1.7 };
+    scenario.ball.velocity = { x: 10, y: 0, z: 0 };
+    const session = new MatchSession(createDefaultAIRegistry());
+    session.reset(config, 5, {}, scenario);
+    const outcomes = [];
+    for (let step = 0; step < 40; step += 1) {
+      for (const event of session.step().events) if (event.kind === 'ballTouch') outcomes.push(event.outcome);
+    }
+    const speed = session.snapshot().ball.velocity;
+    session.dispose();
+    return { outcomes, speed };
+  };
+  assert.ok(run(true).outcomes.includes('headed'));
+  assert.ok(!run(false).outcomes.includes('headed'));
 });

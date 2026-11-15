@@ -45,6 +45,38 @@ function loftPower(range: number, speedLimit: number, gravity: number): number {
   return clamp(speed / speedLimit, 0.25, 1);
 }
 
+const CROSS_ELEVATION_DEG = 24;
+const LOB_ELEVATION_DEG = 45;
+const HEAD_HEIGHT_M = 1.9;
+const ELEVATION_SPAN_DEG = 35;
+
+/**
+ * Picks the loft's height and pace. A cross from the wing to a runner in the box is flat enough to arrive at head
+ * height; a short loft goes high to clear a defender; anything else keeps the default arc.
+ */
+function loftFlight(
+  context: AgentContext, origin: Vec2, target: Vec2, range: number, speedLimit: number, gravity: number,
+): { loft: number; power: number } {
+  const { pitch } = context.observation;
+  const goalX = context.attack * pitch.lengthM / 2;
+  const wide = Math.abs(origin.y) > pitch.goalWidthM && Math.abs(goalX - origin.x) < 32;
+  const inBox = Math.abs(goalX - target.x) < 16 && Math.abs(target.y) < pitch.goalWidthM * 1.4;
+  if (wide && inBox && range > 8) {
+    const theta = (CROSS_ELEVATION_DEG * Math.PI) / 180;
+    const rise = range * Math.tan(theta) - HEAD_HEIGHT_M;
+    if (rise > 1) {
+      const speed = Math.sqrt((gravity * range * range) / (2 * Math.cos(theta) ** 2 * rise));
+      return { loft: (CROSS_ELEVATION_DEG - 15) / ELEVATION_SPAN_DEG, power: clamp(speed / speedLimit, 0.3, 1) };
+    }
+  }
+  if (range < 14) {
+    const theta = (LOB_ELEVATION_DEG * Math.PI) / 180;
+    const speed = Math.sqrt((range * gravity) / Math.sin(2 * theta));
+    return { loft: (LOB_ELEVATION_DEG - 15) / ELEVATION_SPAN_DEG, power: clamp(speed / speedLimit, 0.25, 1) };
+  }
+  return { loft: LOFT_PASS, power: loftPower(range, speedLimit, gravity) };
+}
+
 function onPitch(observation: TeamObservation, point: Vec2, margin = 0.7): Vec2 {
   const { lengthM, widthM } = observation.pitch;
   return {
@@ -160,10 +192,8 @@ export function decodeAction(
     return { ...base, request: { kind: "keeperRelease", technique: roll ? "roll" : "throw", direction: aim, power } };
   }
   if (loft) {
-    return { ...base, request: {
-      kind: "kick", kickType: "loft", direction: aim, loft: LOFT_PASS,
-      power: loftPower(range, physical.maxKickSpeedMps * 0.75, gravity),
-    } };
+    const flight = loftFlight(context, origin, target, range, physical.maxKickSpeedMps * 0.75, gravity);
+    return { ...base, request: { kind: "kick", kickType: "loft", direction: aim, ...flight } };
   }
   return { ...base, request: {
     kind: "kick", kickType: "pass", direction: aim, loft: 0,

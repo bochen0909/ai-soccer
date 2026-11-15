@@ -96,6 +96,11 @@ export interface MatchRules {
    * ball: the nearest at most this many meters away, the next at most twice as far, and so on. Off when unset.
    */
   restartSupportM?: number;
+  /**
+   * When true, a ball that reaches a player's head or upper body is headed on instead of bouncing off. The header goes
+   * where the player is moving (or toward goal in the attacking third), with an error that shrinks with skill.
+   */
+  headerContact?: boolean;
 }
 
 export interface MatchConfig {
@@ -239,7 +244,7 @@ export type MatchEvent = { tick: number; ordinal: number } & (
   | {
       kind: "ballTouch";
       playerId: PlayerId;
-      outcome: "received" | "miscontrolled" | "dribbled" | "deflected";
+      outcome: "received" | "miscontrolled" | "dribbled" | "deflected" | "headed";
       position: Vec3;
       flightAction?: ActionKey;
     }

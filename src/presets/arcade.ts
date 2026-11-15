@@ -72,6 +72,7 @@ export function createArcadeConfig(): MatchConfig {
       keeperHoldTicks: 360,
       restartExclusionM: 3,
       restartSupportM: 7,
+      headerContact: true,
       randomKickoff: true,
     },
     tuning: { version: 2 },

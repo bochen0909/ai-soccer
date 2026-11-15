@@ -156,7 +156,7 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
           resolveLaunch(state, slots, event.player, events, results);
           break;
         default:
-          resolveContact(state, event, events);
+          resolveContact(state, event, events, play.actions);
       }
       updateDribbleControl(state, events);
     }
@@ -353,6 +353,7 @@ function resolveContact(
   state: EngineState,
   event: Exclude<PhysicsEvent, { kind: "crossing" | "firstTouch" | "defense" | "launch" }>,
   events: EventData[],
+  actions: ReadonlyMap<PlayerId, PlayerAction>,
 ): void {
   switch (event.kind) {
     case "wall":
@@ -369,6 +370,10 @@ function resolveContact(
       resolvePlayerContact(state, event.first, event.second);
       break;
     case "ballContact": {
+      if (event.player !== undefined && canHeader(state, event.player)) {
+        resolveHeader(state, event.player, event.normal, actions.get(event.player.playerId), events);
+        break;
+      }
       const colliderVelocity = onGround(event.player?.velocity ?? { x: 0, y: 0 });
       const normalSpeed = dot(subtract(state.ball.velocity, colliderVelocity), event.normal);
       const impulseSpeed = -(1 + state.config.ball.contactRestitution) * normalSpeed;
@@ -390,6 +395,69 @@ function resolveContact(
       break;
     }
   }
+}
+
+const HEADER_MIN_HEIGHT_FRACTION = 0.58;
+const HEADER_MAX_SPEED_MPS = 22;
+const HEADER_GOAL_RANGE_M = 22;
+
+function canHeader(state: EngineState, player: PlayerState): boolean {
+  const { ball } = state;
+  return state.config.rules.headerContact === true && ball.control.kind === "free" &&
+    ball.position.z >= player.definition.bodyHeightM * HEADER_MIN_HEIGHT_FRACTION;
+}
+
+/**
+ * A header sends the ball where the player is moving, or at goal from the attacking third, or else straight ahead.
+ * Skill sets the aim error; the ball's pace is partly returned, so a hard cross is headed hard.
+ */
+function resolveHeader(
+  state: EngineState, player: PlayerState, normal: Vec3, action: PlayerAction | undefined, events: EventData[],
+): void {
+  const { ball } = state;
+  const { technical } = player.definition.abilities;
+  const skill = (technical.firstTouch + technical.passing) / 2;
+  const incoming = Math.hypot(ball.velocity.x - player.velocity.x, ball.velocity.y - player.velocity.y,
+    ball.velocity.z);
+  const attack = attackDirection(state, player.teamId);
+  const goalX = attack * state.config.pitch.lengthM / 2;
+  const nearGoal = Math.abs(goalX - player.position.x) <= HEADER_GOAL_RANGE_M;
+
+  const moving = action !== undefined && Math.hypot(action.movement.x, action.movement.y) > 0;
+  let aim: Vec2;
+  let drop = 0;
+  if (moving) aim = action.movement;
+  else if (nearGoal) {
+    const side = Math.sign(-player.position.y) * state.config.pitch.goalWidthM * 0.25;
+    aim = { x: goalX - ball.position.x, y: side - ball.position.y };
+    drop = 6;
+  } else aim = { x: Math.cos(player.facingRad), y: Math.sin(player.facingRad) };
+  const length = Math.hypot(aim.x, aim.y) || 1;
+  let direction = { x: aim.x / length, y: aim.y / length };
+  const into = direction.x * normal.x + direction.y * normal.y;
+  if (into < 0) {
+    // The ball cannot leave through the head it just touched; slide it past the body instead.
+    const x = direction.x - into * normal.x + 0.3 * normal.x;
+    const y = direction.y - into * normal.y + 0.3 * normal.y;
+    const norm = Math.hypot(x, y) || 1;
+    direction = { x: x / norm, y: y / norm };
+  }
+  const error = (2 * randomUnit(state) - 1) * (0.04 + 0.28 * (1 - skill));
+  const angle = Math.atan2(direction.y, direction.x) + error;
+  const speed = Math.min(HEADER_MAX_SPEED_MPS, state.config.ball.maxSpeedMps, 3 + 0.55 * incoming + 3 * skill);
+  const elevation = ((moving ? 14 : nearGoal ? -drop : 18) * Math.PI) / 180;
+  ball.velocity = {
+    x: Math.cos(angle) * speed * Math.cos(elevation),
+    y: Math.sin(angle) * speed * Math.cos(elevation),
+    z: speed * Math.sin(elevation),
+  };
+  ball.lastTouchPlayerId = player.playerId;
+  const flightAction = ball.flightAction;
+  delete ball.flightAction;
+  state.touchExclusion = { playerId: player.playerId, untilTick: state.tick + 6 };
+  events.push({
+    kind: "ballTouch", playerId: player.playerId, outcome: "headed", position: { ...ball.position }, flightAction,
+  });
 }
 
 /** The seed players plus everyone connected to them through touching or overlapping bodies. */
