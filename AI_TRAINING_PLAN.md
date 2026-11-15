@@ -277,3 +277,8 @@ New reward `turnover` (`--turnover-bonus`): +w when the last touch of the ball p
 - Head to head vs gen8: +0.32 +/- 0.25 (W58 D37 L33) and +0.20 +/- 0.24 (W55 D39 L34) on two seed sets; 113 wins to 67 over 256 matches. Promoted as gen9; anchor `models/anchors/gen9-role_gen9.json`.
 - Against Hard it is +5.02 +/- 0.46 (gen8: +5.59 +/- 0.47), a difference within noise.
 - The pass bonus did not raise passing: about 9.2 completed passes per match against 9.1 for gen8 (30 matches each); the share of live ticks spent dribbling fell from 55% to 50%. No sign of passing loops.
+
+## Deferred and open
+
+- Heading is not supported by the engine (no head-ball action, no aerial contact). Kept for a future improvement; it would change the model's output and restart the lineage.
+- The goalkeeper is the clearest weakness: gen9 made 0 saves in 30 matches against Hard (about 16 attempts in 20 matches, almost all missed), while the Hard AI's keeper saves about 31% of shots on target. The `keeper` drill was added to train it; to be mixed in from gen11.
