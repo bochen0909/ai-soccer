@@ -298,7 +298,11 @@ function draw(now: number): void {
         return { snapshot, align: placed, finished: result.status === "finished" };
       });
       if (frame.finished) finish(frame.current);
-      else if (frame.pauseReason) pause("The match paused while the browser was busy.");
+      else if (frame.pauseReason) {
+        // A watched CPU match has nothing to protect, so resume the clock instead of gating.
+        if (humanControlled()) pause("The match paused while the browser was busy.");
+        else timing.align();
+      }
     } catch (error) {
       console.error(error);
       mode = "error";
@@ -347,8 +351,8 @@ window.addEventListener("keydown", (event) => {
   else if (mode === "paused" && surface.contains(document.activeElement)) start();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) pause("Resume to return to the pitch.");
+  if (document.hidden && humanControlled()) pause("Resume to return to the pitch.");
 });
-window.addEventListener("blur", () => pause("Resume to return to the pitch."));
+window.addEventListener("blur", () => { if (humanControlled()) pause("Resume to return to the pitch."); });
 showReady();
 requestAnimationFrame(draw);
