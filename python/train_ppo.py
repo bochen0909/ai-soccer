@@ -94,11 +94,11 @@ def main():
     parser.add_argument("--size", type=int, default=5, choices=[5, 11])
     parser.add_argument("--opponent", default="default", choices=["default", "tuned"])
     parser.add_argument("--period-ticks", type=int, default=None, help="shorter halves, for faster episodes")
-    parser.add_argument("--drill", default=None, choices=["shoot", "attack", "pass", "three", "counter", "defend", "defend2"], help="train on a short drill, not full matches")
+    parser.add_argument("--drill", default=None, choices=["shoot", "attack", "pass", "three", "counter", "defend", "defend2", "giveandgo", "rondo", "keeper"], help="train on a short drill, not full matches")
     parser.add_argument("--drill-mix", type=float, default=0.0, help="league: share of episodes that start as a short drill")
     parser.add_argument("--replay-file", default=None, help="situations from record-failures.mjs, used by the drill kind \"replay\"")
     parser.add_argument("--drill-kinds", nargs="+", default=["three", "counter", "pass", "attack"],
-                        choices=["shoot", "attack", "pass", "three", "counter", "defend", "defend2", "replay"])
+                        choices=["shoot", "attack", "pass", "three", "counter", "defend", "defend2", "giveandgo", "rondo", "keeper", "replay"])
     parser.add_argument("--max-steps", type=int, default=None, help="policy steps before an episode is cut off (drills: 60)")
     parser.add_argument("--progress", type=float, default=None, help="ball progress reward weight (default 0.1)")
     parser.add_argument("--turnover-bonus", type=float, default=0.0, help="reward for winning the ball from the opponent, penalty for losing it")

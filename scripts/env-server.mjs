@@ -1,5 +1,5 @@
 // Hosts several SoccerTrainingEnv instances and serves them over stdio for a Python trainer.
-// Options include drill ("shoot", "attack", "pass", "three" or "counter"), or drillMix {p, kinds, maxSteps} (kind "replay" draws from replayFile, scenarios recorded by record-failures.mjs) to start some episodes as drills for short situation drills that end on a goal or dead ball.
+// Options include drill ("shoot", "attack", "pass", "three", "counter", "defend", "defend2", "giveandgo" or "rondo"), or drillMix {p, kinds, maxSteps} (kind "replay" draws from replayFile, scenarios recorded by record-failures.mjs) to start some episodes as drills for short situation drills that end on a goal or dead ball.
 // Frames, both directions: u32 little-endian length, u8 type, body.
 //   1 INIT  body JSON  -> 129 JSON {envs, agents, obsSize, actCount, moveCount}
 //   2 RESET body JSON  -> 130 binary step payload
@@ -116,7 +116,12 @@ function begin(slot, seed) {
   const drill = slots.options.drill ?? (mix && slot.random() < mix.p ? mix.kinds[Math.floor(slot.random() * mix.kinds.length)] : undefined);
   const key = `${slot.side}|${opponent.spec}|${drill ? "drill" : "match"}`;
   if (!slot.envs.has(key)) {
-    const envOptions = drill && !slots.options.drill ? { ...slots.options, drill, maxSteps: mix.maxSteps ?? 60 } : slots.options;
+    // A rondo has no goal: it ends after 90 steps, and holding the ball earns its own reward instead of progress.
+    const rondo = drill === "rondo" && !slots.options.drill;
+    const envOptions = drill && !slots.options.drill ? {
+      ...slots.options, drill, maxSteps: rondo ? 90 : mix.maxSteps ?? 60,
+      reward: rondo ? { ...slots.options.reward, possession: 0.01, ballProgress: 0 } : slots.options.reward,
+    } : slots.options;
     slot.envs.set(key, makeEnv(envOptions, slot.side === 0 ? "home" : "away", opponent.spec));
   }
   slot.current = slot.envs.get(key);

@@ -66,7 +66,10 @@ const session = new MatchSession(registry);
 const names = ["N. Kova", "M. Silva", "D. Reyes", "T. Moss", "A. Vega"];
 const fullNames = ["N. Kova", "M. Silva", "D. Reyes", "I. Okafor", "R. Malik", "T. Moss",
   "L. Costa", "S. Kim", "J. Mensah", "A. Vega", "E. Sato"];
-const seed = 17;
+/** Every game gets a fresh seed. Add ?seed=N to the page address to replay a particular game. */
+const pinnedSeed = new URLSearchParams(location.search).get("seed");
+const nextSeed = (): number => pinnedSeed !== null && Number.isInteger(Number(pinnedSeed))
+  ? Number(pinnedSeed) >>> 0 : Math.floor(Math.random() * 0x100000000);
 
 function humanControlled(): boolean {
   return homeControl.value === "human";
@@ -86,7 +89,7 @@ function resetSession(): void {
     [config.teams[0].id]: profileTeamOptions(humanControlled() ? "default" : profileOf(homeControl)),
     [config.teams[1].id]: profileTeamOptions(profileOf(awayControl)),
   };
-  session.reset(config, seed, humanControlled() ? { human: { teamId, playerId: taker.id }, teams } : { teams });
+  session.reset(config, nextSeed(), humanControlled() ? { human: { teamId, playerId: taker.id }, teams } : { teams });
 }
 
 /** Tuned profiles only apply to formats they were tuned for. Falls back to the default profile otherwise. */

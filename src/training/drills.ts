@@ -1,11 +1,11 @@
 import type { MatchConfig, ScenarioDefinition, ScenarioPlayerState, Vec2 } from "../contracts/index.js";
 
-export type DrillKind = "shoot" | "attack" | "pass" | "three" | "counter" | "defend" | "defend2";
+export type DrillKind = "shoot" | "attack" | "pass" | "three" | "counter" | "defend" | "defend2" | "giveandgo" | "rondo" | "keeper";
 
 const MIN_SPACING_M = 1.2;
 const MAX_PLACEMENT_ATTEMPTS = 50;
 
-export const DRILL_KINDS: readonly DrillKind[] = ["shoot", "attack", "pass", "three", "counter", "defend", "defend2"];
+export const DRILL_KINDS: readonly DrillKind[] = ["shoot", "attack", "pass", "three", "counter", "defend", "defend2", "giveandgo", "rondo", "keeper"];
 
 /** Small deterministic generator so the same seed always builds the same drill. */
 function random(seed: number): () => number {
@@ -32,6 +32,12 @@ function random(seed: number): () => number {
  *   defend  a two-on-one against the learner: an opposing carrier and a runner come at the learner's goal, with one
  *           learner defender (and the keeper) back. Defending is the goal, so the learner starts without the ball.
  *   defend2 a three-on-two against the learner, with two learner defenders
+ *   giveandgo a defender presses the carrier from the front, and a teammate stands to the side and slightly ahead;
+ *           the way through is a pass to the teammate and a return pass behind the defender
+ *   rondo   keep-away in a small square in midfield: four learner players around the square and two rivals inside it,
+ *           the carrier is one of the four. There is no goal to score; train it with a reward for holding the ball.
+ *   keeper  a lone rival striker with the ball 9 to 18 m from the learner's goal and no defenders, with a second rival
+ *           waiting outside the area to press the keeper's release. Trains the learner's keeper.
  * Everyone else holds a spot away from the action. The striker is the last player on the roster.
  */
 export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 0 | 1, seed: number): ScenarioDefinition {
@@ -62,7 +68,7 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
   const foes = outfield(rival);
   const attacker = foes.at(-1)!;
   const attackMates = foes.slice(0, -1);
-  const defending = kind === "defend" || kind === "defend2";
+  const defending = kind === "defend" || kind === "defend2" || kind === "keeper";
 
   let ballAt: Vec2 = { x: 0, y: 0 };
   for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt += 1) {
@@ -86,6 +92,38 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
       // Close enough to block the run and the shot, but not touching.
       if (defender) put(defender.id, ballAt.x + between(1.8, 2.8), ballAt.y + between(-0.6, 0.6));
       rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
+    } else if (kind === "giveandgo") {
+      const side = next() < 0.5 ? -1 : 1;
+      ballAt = { x: goalX - between(20, 26), y: side * between(0, 5) };
+      put(carrier.id, ballAt.x - 0.45, ballAt.y);
+      const [wall] = mates;
+      if (wall) put(wall.id, ballAt.x + between(3, 5), ballAt.y + side * between(4, 7));
+      mates.slice(1).forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
+      const [presser, back, ...rest] = foes;
+      if (presser) put(presser.id, ballAt.x + between(2.5, 3.5), ballAt.y + between(-0.8, 0.8));
+      if (back) put(back.id, goalX - between(10, 14), -side * between(0, 4));
+      rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
+    } else if (kind === "rondo") {
+      const centre = { x: between(-6, 6), y: between(-4, 4) };
+      const radius = between(5.5, 7);
+      const turn = between(0, 2 * Math.PI);
+      const ring = [carrier, ...mates.slice(0, 3)];
+      ring.forEach((player, index) => {
+        const angle = turn + (2 * Math.PI * index) / ring.length + between(-0.2, 0.2);
+        put(player.id, centre.x + radius * Math.cos(angle), centre.y + radius * Math.sin(angle));
+      });
+      ballAt = { ...placed.get(carrier.id)! };
+      ballAt = { x: ballAt.x + 0.45 * Math.sign(centre.x - ballAt.x || 1), y: ballAt.y };
+      foes.slice(0, 2).forEach((foe, index) => put(foe.id, centre.x + (index ? 1.5 : -1.5), centre.y + between(-1.5, 1.5)));
+      foes.slice(2).forEach((foe, index) => put(foe.id, goalX - 6 - 2 * index, (index % 2 ? 1 : -1) * between(8, 14)));
+      mates.slice(3).forEach((mate, index) => put(mate.id, -goalX + 8 + 2 * index, (index % 2 ? 1 : -1) * between(8, 14)));
+    } else if (kind === "keeper") {
+      ballAt = { x: -goalX + between(9, 18), y: between(-7, 7) };
+      put(attacker.id, ballAt.x + 0.45, ballAt.y);
+      const [presser, ...others] = attackMates;
+      if (presser) put(presser.id, -goalX + between(11, 15), between(-6, 6));
+      others.forEach((foe, index) => put(foe.id, goalX - 6 - 2 * index, (index % 2 ? 1 : -1) * between(8, 14)));
+      outfield(learner).forEach((player, index) => put(player.id, between(2, 10) + 2 * index, (index % 2 ? 1 : -1) * between(4, 12)));
     } else if (kind === "defend" || kind === "defend2") {
       // The rival attacks toward -x, so these coordinates are mirrored relative to the other drills.
       const side = next() < 0.5 ? -1 : 1;
