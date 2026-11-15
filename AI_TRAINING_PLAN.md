@@ -269,3 +269,11 @@ New reward `turnover` (`--turnover-bonus`): +w when the last touch of the ball p
 - `scripts/record-failures.mjs` plays a model against opponents (Hard, Default, earlier generations) and saves the state 300 ticks (5 s) before each goal it concedes as a scenario. 240 matches of gen7 gave 123 situations (`demos/failures.json`, local). `mirrorScenario` lets a situation recorded for the home team serve the away team. Training uses them with drill kind `replay` and `--replay-file`.
 - `role_def1` (defensive drills plus turnover 0.05) vs gen7: +0.23 +/- 0.27 (W52 D39 L37), not clear, not promoted.
 - `role_replay1` (400 iterations from gen7, 30% drills with three eighths of them failure replays, assist 0.5, turnover 0.05) vs gen7: +0.51 +/- 0.26 (W67 D32 L29) on seed 1 and +0.17 +/- 0.24 (W54 D37 L37) on seed 2; 121 wins to 66 over the 256 matches. The run's own small evaluation had it behind gen7 (-0.31), which is noise at that size. Promoted as gen8; anchor `models/anchors/gen8-role_replay1.json`.
+
+## Generation 9: all drills, pass bonus, merged failure set
+
+`role_gen9`: 400 iterations from gen8, anchors gen7 and gen8, 30% drills over all eight kinds (`replay` drawn three times as often) with 285 recorded failures (123 from gen7 plus 162 from gen8, `demos/failures_all.json`), assist 0.5, turnover 0.05 and the pass-completed bonus at 0.05 with no guard against passing back and forth.
+
+- Head to head vs gen8: +0.32 +/- 0.25 (W58 D37 L33) and +0.20 +/- 0.24 (W55 D39 L34) on two seed sets; 113 wins to 67 over 256 matches. Promoted as gen9; anchor `models/anchors/gen9-role_gen9.json`.
+- Against Hard it is +5.02 +/- 0.46 (gen8: +5.59 +/- 0.47), a difference within noise.
+- The pass bonus did not raise passing: about 9.2 completed passes per match against 9.1 for gen8 (30 matches each); the share of live ticks spent dribbling fell from 55% to 50%. No sign of passing loops.
