@@ -100,6 +100,7 @@ def main():
                         choices=["shoot", "attack", "pass", "three", "counter"])
     parser.add_argument("--max-steps", type=int, default=None, help="policy steps before an episode is cut off (drills: 60)")
     parser.add_argument("--progress", type=float, default=None, help="ball progress reward weight (default 0.1)")
+    parser.add_argument("--turnover-bonus", type=float, default=0.0, help="reward for winning the ball from the opponent, penalty for losing it")
     parser.add_argument("--assist-bonus", type=float, default=0.0, help="extra reward on a goal scored within 6 s of a completed pass")
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="reward when a teammate receives a pass (drills and full matches)")
     parser.add_argument("--value-warmup", type=int, default=0,
@@ -150,8 +151,8 @@ def main():
         options["maxSteps"] = args.max_steps
     if args.drill_mix > 0 and not args.drill:
         options["drillMix"] = {"p": args.drill_mix, "kinds": args.drill_kinds, "maxSteps": 60}
-    if (args.pass_bonus or args.assist_bonus) and not args.drill:
-        options["reward"] = {"passCompleted": args.pass_bonus, "assist": args.assist_bonus}
+    if (args.pass_bonus or args.assist_bonus or args.turnover_bonus) and not args.drill:
+        options["reward"] = {"passCompleted": args.pass_bonus, "assist": args.assist_bonus, "turnover": args.turnover_bonus}
     if args.progress is not None:
         options["reward"] = {**options.get("reward", {}), "ballProgress": args.progress}
     run_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", args.name)

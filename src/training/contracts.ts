@@ -54,6 +54,8 @@ export interface RewardWeights {
   passCompleted: number;
   /** Added to a goal the learner scores within six seconds of a teammate receiving a pass. Cannot be farmed. */
   assist: number;
+  /** Added when the ball passes from the opponent's last touch to ours (tackle, interception, forced error), subtracted for the reverse. */
+  turnover: number;
 }
 
 export interface TrainingEnvOptions {

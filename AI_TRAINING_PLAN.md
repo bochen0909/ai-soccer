@@ -258,3 +258,7 @@ Same recipe as gen7 (from gen6, 20% drills, assist 0.5, 400 iterations) with `--
 | 0.1 (gen7) | - | 9.7 | 58% |
 
 No measurable effect on strength or on dribbling. The term neither helps nor hurts at this stage, so it was left at 0.1 and gen7 stays shipped. Goals and the assist bonus carry the learning.
+
+## Turnover reward
+
+New reward `turnover` (`--turnover-bonus`): +w when the last touch of the ball passes from the opponent to the learner's team (tackle, interception, forced error, an opponent pass going out), -w for the reverse, so it cannot be farmed; goals reset the tracking. `role_turn1` (gen7 recipe plus `--turnover-bonus 0.05`) vs gen7 over 128 matches: +0.23 +/- 0.26 (W54 D32 L42), 9.2 passes per match, dribble share 55%. Not a clear gain, so not promoted; gen7 stays shipped.
