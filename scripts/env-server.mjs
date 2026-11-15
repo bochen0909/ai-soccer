@@ -1,5 +1,5 @@
 // Hosts several SoccerTrainingEnv instances and serves them over stdio for a Python trainer.
-// Options include drill ("shoot", "attack", "pass", "three" or "counter"), or drillMix {p, kinds, maxSteps} to start some episodes as drills for short situation drills that end on a goal or dead ball.
+// Options include drill ("shoot", "attack", "pass", "three" or "counter"), or drillMix {p, kinds, maxSteps} (kind "replay" draws from replayFile, scenarios recorded by record-failures.mjs) to start some episodes as drills for short situation drills that end on a goal or dead ball.
 // Frames, both directions: u32 little-endian length, u8 type, body.
 //   1 INIT  body JSON  -> 129 JSON {envs, agents, obsSize, actCount, moveCount}
 //   2 RESET body JSON  -> 130 binary step payload
@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import {
   AI_PROFILES, BaselineTeamAI, buildAgentContexts, createActionSpace, createArcadeConfig, createDefaultAIRegistry,
-  createDrill, createElevenAsideConfig, decodeWeights, intentToChoice, profileTeamOptions, registerNeuralNetwork,
+  createDrill, createElevenAsideConfig, mirrorScenario, decodeWeights, intentToChoice, profileTeamOptions, registerNeuralNetwork,
   SoccerTrainingEnv, writeActionMask,
 } from "../dist/index.js";
 
@@ -57,7 +57,15 @@ function makeEnv(options, learnerTeamId, spec) {
   });
 }
 
+let replays = [];
+/** A recorded situation (written for the home team as learner), mirrored when the learner is the away team. */
+function replayScenario(side, seed) {
+  const scenario = replays[seed % replays.length];
+  return side === 0 ? scenario : mirrorScenario(scenario);
+}
+
 function init(options) {
+  if (options.replayFile) replays = JSON.parse(readFileSync(options.replayFile, "utf8"));
   pool = options.pool ?? [{ id: 0, spec: options.opponent ?? "default", weight: 1 }];
   slots = Array.from({ length: options.envs }, (_, index) => ({
     index, episode: 0, side: 0, steps: 0, envs: new Map(), current: undefined, last: undefined, opponentId: pool[0].id,
@@ -126,7 +134,8 @@ function begin(slot, seed) {
     const episodeSeed = (seed ?? seedFor(slot)) + attempt * 15_485_863 >>> 0;
     try {
       // Drills start from a built situation. Without one, the match starts from kickoff.
-      const scenario = drill ? createDrill(drill, slot.current.config, slot.side, episodeSeed) : undefined;
+      const scenario = drill === "replay" ? replayScenario(slot.side, episodeSeed)
+        : drill ? createDrill(drill, slot.current.config, slot.side, episodeSeed) : undefined;
       slot.last = slot.current.reset(episodeSeed, scenario);
       break;
     } catch (error) {

@@ -262,3 +262,10 @@ No measurable effect on strength or on dribbling. The term neither helps nor hur
 ## Turnover reward
 
 New reward `turnover` (`--turnover-bonus`): +w when the last touch of the ball passes from the opponent to the learner's team (tackle, interception, forced error, an opponent pass going out), -w for the reverse, so it cannot be farmed; goals reset the tracking. `role_turn1` (gen7 recipe plus `--turnover-bonus 0.05`) vs gen7 over 128 matches: +0.23 +/- 0.26 (W54 D32 L42), 9.2 passes per match, dribble share 55%. Not a clear gain, so not promoted; gen7 stays shipped.
+
+## Defensive drills and failure replay (gen8)
+
+- New drills `defend` (2v1 against us, one defender back) and `defend2` (3v2 against us), where the rival carries toward our goal and the learner starts without the ball.
+- `scripts/record-failures.mjs` plays a model against opponents (Hard, Default, earlier generations) and saves the state 300 ticks (5 s) before each goal it concedes as a scenario. 240 matches of gen7 gave 123 situations (`demos/failures.json`, local). `mirrorScenario` lets a situation recorded for the home team serve the away team. Training uses them with drill kind `replay` and `--replay-file`.
+- `role_def1` (defensive drills plus turnover 0.05) vs gen7: +0.23 +/- 0.27 (W52 D39 L37), not clear, not promoted.
+- `role_replay1` (400 iterations from gen7, 30% drills with three eighths of them failure replays, assist 0.5, turnover 0.05) vs gen7: +0.51 +/- 0.26 (W67 D32 L29) on seed 1 and +0.17 +/- 0.24 (W54 D37 L37) on seed 2; 121 wins to 66 over the 256 matches. The run's own small evaluation had it behind gen7 (-0.31), which is noise at that size. Promoted as gen8; anchor `models/anchors/gen8-role_replay1.json`.

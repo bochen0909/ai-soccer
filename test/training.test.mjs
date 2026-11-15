@@ -238,7 +238,7 @@ test('drills build valid situations that play out the same from either side', ()
   const coarse = (outcomes) => outcomes.map(([steps, goals]) => [steps, goals]);
   for (const kind of DRILL_KINDS) {
     const [home, away] = [play(kind, 'home'), play(kind, 'away')];
-    const loose = kind === 'pass' || kind === 'three' || kind === 'counter';
+    const loose = kind !== 'shoot' && kind !== 'attack';
     assert.deepEqual(loose ? coarse(home) : home, loose ? coarse(away) : away);
   }
 });
