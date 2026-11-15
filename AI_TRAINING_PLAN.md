@@ -286,3 +286,9 @@ New reward `turnover` (`--turnover-bonus`): +w when the last touch of the ball p
 ## Generation 10 (role_gen10)
 
 Init from gen9, 800 iterations (double), mix adds giveandgo and rondo drills and the merged failure set (430 states). Head to head vs gen9, 128 matches each: gen9 lost by 0.95 (W24 D31 L73) on seed 1 and by 1.20 (W23 D22 L83) on seed 2. Promoted. Passes per match 8.2 (gen9 9.2), dribble share of live ticks 0.39 (gen9 about 0.50). Keeper drill still not in a run; planned for gen11.
+
+## Header contact, crosses and lobs, and generation 11 (role_gen11)
+
+Engine: `rules.headerContact` (on in the arcade preset) makes a ball reaching a player's upper body (above 58% of body height) a header. Direction is the player's movement, else goal in the attacking third, else facing; error shrinks with first touch and passing skill. Decoder: lofts from the wing to a runner in the box fly flat (24 degrees) and reach head height at the target; lofts under 14 m go high (45 degrees). New drills: `cross`, `lob`. Observation and action sizes are unchanged, so every old model still loads; backups are in `models/backup-pre-heading/`. Old gen10 still beats gen9 by +1.23 on the new engine.
+
+Gen11: init from gen10, 800 iterations, mix adds cross, lob and keeper drills, 599 failure states (169 re-recorded under the new engine). Head to head vs gen10 (128 matches each, gen10 listed first): -0.25, -0.48, -0.29 on three seed sets, so gen11 wins each. Promoted. Passes per match 6.8 (gen10 8.0), headers per match 4.2 (7.6), dribble share 0.40 (0.40), keeper saves 0.03 per match (0.00): the keeper is still not saving, and passing fell.
