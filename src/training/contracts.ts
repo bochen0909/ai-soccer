@@ -56,6 +56,12 @@ export interface RewardWeights {
   assist: number;
   /** Added when the ball passes from the opponent's last touch to ours (tackle, interception, forced error), subtracted for the reverse. */
   turnover: number;
+  /**
+   * Added per opponent a completed pass takes out of the game: one who stood nearer our goal than the ball when it was
+   * kicked and stands nearer our goal than the receiver when it arrives (at most two count). A back pass bypasses
+   * nobody, and a defender can only be bypassed again after he gets ahead of the ball once more.
+   */
+  passBreak: number;
 }
 
 export interface TrainingEnvOptions {

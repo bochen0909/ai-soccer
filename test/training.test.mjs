@@ -297,3 +297,24 @@ test('a ball arriving at head height is headed on only when the rule is on', asy
   assert.ok(run(true).outcomes.includes('headed'));
   assert.ok(!run(false).outcomes.includes('headed'));
 });
+
+test('a pass that gets the ball past a defender earns the pass-break reward, a back pass does not', () => {
+  const config = createArcadeConfig();
+  const total = (slot, loft) => {
+    const env = new SoccerTrainingEnv({ config, endOnDeadBall: true, maxSteps: 60, reward: { passBreak: 1 } });
+    let result = env.reset(4, createDrill('lob', config, 0, 4));
+    let sum = 0;
+    for (let step = 0; step < 60 && !result.terminated && !result.truncated; step += 1) {
+      const actions = new Array(env.agentCount * ACTION_FIELDS).fill(0);
+      const carrier = (env.agentCount - 1) * ACTION_FIELDS;
+      if (step === 0) actions[carrier + 2] = (loft ? env.actionSpace.loftBase : ACT_PASS_BASE) + slot;
+      result = env.step(actions);
+      sum += result.info.rewardTerms.passBreak;
+    }
+    return sum;
+  };
+  // The runner stands behind the wall defender; slot 1 is the first outfield teammate.
+  const best = Math.max(...[1, 2, 3].map((slot) => total(slot, true)));
+  assert.ok(best > 0, 'a lob over the defender should bypass him');
+  assert.equal(total(0, false), 0);
+});

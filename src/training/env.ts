@@ -24,6 +24,7 @@ export const DEFAULT_REWARD: RewardWeights = {
   passCompleted: 0,
   assist: 0,
   turnover: 0,
+  passBreak: 0,
 };
 
 type RewardTerms = StepInfo["rewardTerms"];
@@ -41,6 +42,8 @@ export class SoccerTrainingEnv {
   private lastPassTick = -Infinity;
   /** Team of the last player to touch or kick the ball, or null at the start and after a goal. */
   private lastTouchLearner: boolean | null = null;
+  /** Opponents ahead of the ball when a learner last kicked it, by id, with the ball's attack-frame x then. */
+  private kickedPast = new Set<PlayerId>();
 
   readonly config: MatchConfig;
   private readonly learnerIndex: 0 | 1;
@@ -109,8 +112,9 @@ export class SoccerTrainingEnv {
     this.done = false;
     this.lastPassTick = -Infinity;
     this.lastTouchLearner = null;
+    this.kickedPast = new Set();
     this.feedback.clear();
-    const zero = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0 };
+    const zero = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0 };
     return this.result(0, false, false, 0, zero);
   }
 
@@ -147,7 +151,7 @@ export class SoccerTrainingEnv {
     const attack = before.attackDirections[this.learnerIndex];
     const startedLive = before.phase.kind === "live";
     let interrupted = false;
-    const terms = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0 };
+    const terms = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0 };
     this.feedback.clear();
     let elapsed = 0;
     let finished = false;
@@ -206,7 +210,7 @@ export class SoccerTrainingEnv {
   }
 
   /** Returns true when the event ends continuous play. */
-  private scoreEvent(event: MatchEvent, terms: { goalScored: number; goalConceded: number; passCompleted: number; assist: number; turnover: number }): boolean {
+  private scoreEvent(event: MatchEvent, terms: { goalScored: number; goalConceded: number; passCompleted: number; assist: number; turnover: number; passBreak: number }): boolean {
     if (event.kind === "goal") {
       this.lastTouchLearner = null;
       if (event.teamId === this.learnerTeamId) {
@@ -225,11 +229,32 @@ export class SoccerTrainingEnv {
       }
       this.lastTouchLearner = learner;
     }
+    if (event.kind === "actionContact" && event.outcome === "kicked") {
+      this.kickedPast = new Set();
+      if (this.learnerPlayers.has(event.action.playerId) && this.weights.passBreak !== 0) {
+        const view = this.engine.observe(this.learnerTeamId);
+        const attack = view.attackDirections[this.learnerIndex];
+        for (const player of view.players) {
+          if (!this.learnerPlayers.has(player.playerId) && player.position.x * attack > event.position.x * attack + 0.5) {
+            this.kickedPast.add(player.playerId);
+          }
+        }
+      }
+    }
     if (event.kind === "ballTouch" && event.outcome === "received" && event.flightAction !== undefined &&
         event.flightAction.playerId !== event.playerId && this.learnerPlayers.has(event.flightAction.playerId) &&
         this.learnerPlayers.has(event.playerId)) {
       terms.passCompleted += this.weights.passCompleted * this.shapingScale;
       this.lastPassTick = event.tick;
+      if (this.kickedPast.size > 0) {
+        const view = this.engine.observe(this.learnerTeamId);
+        const attack = view.attackDirections[this.learnerIndex];
+        const receiver = view.players.find((player) => player.playerId === event.playerId)!;
+        const bypassed = view.players.filter((player) => this.kickedPast.has(player.playerId) &&
+          player.position.x * attack < receiver.position.x * attack - 0.5).length;
+        terms.passBreak += Math.min(2, bypassed) * this.weights.passBreak * this.shapingScale;
+        this.kickedPast = new Set();
+      }
     }
     return event.kind === "phaseChanged" || event.kind === "ballExit";
   }
@@ -255,7 +280,8 @@ export class SoccerTrainingEnv {
     }
     const rewardTerms = terms as RewardTerms;
     const reward = rewardTerms.goalScored + rewardTerms.goalConceded + rewardTerms.ballProgress +
-      rewardTerms.possession + rewardTerms.passCompleted + rewardTerms.assist + rewardTerms.turnover;
+      rewardTerms.possession + rewardTerms.passCompleted + rewardTerms.assist + rewardTerms.turnover +
+      rewardTerms.passBreak;
     const score = [observation.score[this.learnerIndex], observation.score[1 - this.learnerIndex]] as const;
     return {
       observation: data, actionMask, agentMask, reward, terminated, truncated,
