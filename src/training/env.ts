@@ -15,6 +15,9 @@ import { toPolicy } from "./geometry.js";
 import { createObservationLayout, FEEDBACK_STATUSES, writeObservation } from "./observation.js";
 
 const ASSIST_WINDOW_TICKS = 360;
+const PROGRESS_END_MARGIN_M = 6;
+const SHOT_SPEED_MPS = 21.5;
+const SHOT_RANGE_M = 20;
 
 export const DEFAULT_REWARD: RewardWeights = {
   goalScored: 1,
@@ -25,6 +28,10 @@ export const DEFAULT_REWARD: RewardWeights = {
   assist: 0,
   turnover: 0,
   passBreak: 0,
+  save: 0,
+  passFailed: 0,
+  outOfBounds: 0,
+  shotOnTarget: 0,
 };
 
 type RewardTerms = StepInfo["rewardTerms"];
@@ -44,6 +51,8 @@ export class SoccerTrainingEnv {
   private lastTouchLearner: boolean | null = null;
   /** Opponents ahead of the ball when a learner last kicked it, by id, with the ball's attack-frame x then. */
   private kickedPast = new Set<PlayerId>();
+  /** A learner pass or loft is in the air and no teammate has controlled it yet. */
+  private passInFlight = false;
 
   readonly config: MatchConfig;
   private readonly learnerIndex: 0 | 1;
@@ -113,8 +122,9 @@ export class SoccerTrainingEnv {
     this.lastPassTick = -Infinity;
     this.lastTouchLearner = null;
     this.kickedPast = new Set();
+    this.passInFlight = false;
     this.feedback.clear();
-    const zero = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0 };
+    const zero = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0 };
     return this.result(0, false, false, 0, zero);
   }
 
@@ -151,7 +161,7 @@ export class SoccerTrainingEnv {
     const attack = before.attackDirections[this.learnerIndex];
     const startedLive = before.phase.kind === "live";
     let interrupted = false;
-    const terms = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0 };
+    const terms = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0 };
     this.feedback.clear();
     let elapsed = 0;
     let finished = false;
@@ -172,7 +182,10 @@ export class SoccerTrainingEnv {
 
     const after = this.engine.observe(this.learnerTeamId);
     if (startedLive && after.phase.kind === "live" && !interrupted) {
-      const gain = (toPolicy(after.ball.position, attack).x - toPolicy(before.ball.position, attack).x) / after.pitch.lengthM;
+      // No credit for pushing the ball into the last few meters: past there, the shot is what pays.
+      const cap = after.pitch.lengthM / 2 - PROGRESS_END_MARGIN_M;
+      const gain = (Math.min(cap, toPolicy(after.ball.position, attack).x) -
+        Math.min(cap, toPolicy(before.ball.position, attack).x)) / after.pitch.lengthM;
       terms.ballProgress = gain * this.weights.ballProgress * this.shapingScale;
     }
     const { control } = after.ball;
@@ -210,15 +223,30 @@ export class SoccerTrainingEnv {
   }
 
   /** Returns true when the event ends continuous play. */
-  private scoreEvent(event: MatchEvent, terms: { goalScored: number; goalConceded: number; passCompleted: number; assist: number; turnover: number; passBreak: number }): boolean {
+  private scoreEvent(event: MatchEvent, terms: { goalScored: number; goalConceded: number; passCompleted: number; assist: number; turnover: number; passBreak: number; save: number; passFailed: number; outOfBounds: number; shotOnTarget: number }): boolean {
     if (event.kind === "goal") {
       this.lastTouchLearner = null;
+      this.passInFlight = false;
       if (event.teamId === this.learnerTeamId) {
         terms.goalScored += this.weights.goalScored;
         if (event.tick - this.lastPassTick <= ASSIST_WINDOW_TICKS) terms.assist += this.weights.assist * this.shapingScale;
       }
       else terms.goalConceded += this.weights.goalConceded;
       return true;
+    }
+    if (event.kind === "ballExit") {
+      if (event.teamId !== this.learnerTeamId) terms.outOfBounds += this.weights.outOfBounds * this.shapingScale;
+      this.passInFlight = false;
+    }
+    if (event.kind === "actionContact" && this.learnerPlayers.has(event.action.playerId) &&
+        (event.outcome === "caught" || event.outcome === "parried")) {
+      terms.save += this.weights.save * this.shapingScale;
+    }
+    if (this.passInFlight && ((event.kind === "ballTouch" && !this.learnerPlayers.has(event.playerId)) ||
+        (event.kind === "actionContact" && !this.learnerPlayers.has(event.action.playerId) &&
+          (event.outcome === "wonBall" || event.outcome === "caught" || event.outcome === "parried")))) {
+      terms.passFailed += this.weights.passFailed * this.shapingScale;
+      this.passInFlight = false;
     }
     const toucher = event.kind === "ballTouch" ? event.playerId
       : event.kind === "actionContact" && event.outcome !== "missed" ? event.action.playerId : undefined;
@@ -231,6 +259,8 @@ export class SoccerTrainingEnv {
     }
     if (event.kind === "actionContact" && event.outcome === "kicked") {
       this.kickedPast = new Set();
+      this.passInFlight = false;
+      if (this.learnerPlayers.has(event.action.playerId)) this.scoreKick(event.position, terms);
       if (this.learnerPlayers.has(event.action.playerId) && this.weights.passBreak !== 0) {
         const view = this.engine.observe(this.learnerTeamId);
         const attack = view.attackDirections[this.learnerIndex];
@@ -245,6 +275,7 @@ export class SoccerTrainingEnv {
         event.flightAction.playerId !== event.playerId && this.learnerPlayers.has(event.flightAction.playerId) &&
         this.learnerPlayers.has(event.playerId)) {
       terms.passCompleted += this.weights.passCompleted * this.shapingScale;
+      this.passInFlight = false;
       this.lastPassTick = event.tick;
       if (this.kickedPast.size > 0) {
         const view = this.engine.observe(this.learnerTeamId);
@@ -257,6 +288,28 @@ export class SoccerTrainingEnv {
       }
     }
     return event.kind === "phaseChanged" || event.kind === "ballExit";
+  }
+
+  /** Called right after a learner kick: a shot on target is paid, anything slower is a pass in flight. */
+  private scoreKick(origin: { x: number; y: number }, terms: { shotOnTarget: number }): void {
+    const view = this.engine.observe(this.learnerTeamId);
+    const attack = view.attackDirections[this.learnerIndex];
+    const { position, velocity } = view.ball;
+    const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
+    const goalX = attack * view.pitch.lengthM / 2;
+    const distance = Math.abs(goalX - origin.x);
+    if (speed >= SHOT_SPEED_MPS && velocity.x * attack > 0.3 * speed) {
+      const time = (goalX - position.x) / velocity.x;
+      const y = position.y + velocity.y * time;
+      // A ball that would land first just bounces on toward goal, so only the upper limit matters.
+      const z = position.z + velocity.z * time - 0.5 * (view.ballConfig?.gravityMps2 ?? 9.81) * time * time;
+      if (distance <= SHOT_RANGE_M && Math.abs(y) <= view.pitch.goalWidthM / 2 && z <= view.pitch.goalHeightM) {
+        const close = Math.max(0.25, Math.min(1.5, 1.5 - (1.25 * distance) / SHOT_RANGE_M));
+        terms.shotOnTarget += close * this.weights.shotOnTarget * this.shapingScale;
+      }
+      return;
+    }
+    this.passInFlight = true;
   }
 
   private contexts(observation: TeamObservation): AgentContext[] {
@@ -281,7 +334,8 @@ export class SoccerTrainingEnv {
     const rewardTerms = terms as RewardTerms;
     const reward = rewardTerms.goalScored + rewardTerms.goalConceded + rewardTerms.ballProgress +
       rewardTerms.possession + rewardTerms.passCompleted + rewardTerms.assist + rewardTerms.turnover +
-      rewardTerms.passBreak;
+      rewardTerms.passBreak + rewardTerms.save + rewardTerms.passFailed + rewardTerms.outOfBounds +
+      rewardTerms.shotOnTarget;
     const score = [observation.score[this.learnerIndex], observation.score[1 - this.learnerIndex]] as const;
     return {
       observation: data, actionMask, agentMask, reward, terminated, truncated,

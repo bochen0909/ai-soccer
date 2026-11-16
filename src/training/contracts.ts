@@ -62,6 +62,17 @@ export interface RewardWeights {
    * nobody, and a defender can only be bypassed again after he gets ahead of the ball once more.
    */
   passBreak: number;
+  /** Added when a learner keeper catches or parries the ball. */
+  save: number;
+  /** Negative: a learner pass is intercepted or tackled by an opponent before a teammate controls it. */
+  passFailed: number;
+  /** Negative: the ball leaves play and the restart goes to the opponent, so our side touched it last. */
+  outOfBounds: number;
+  /**
+   * Added when a learner kick heads for the goal frame within 20 m, scaled up the closer it is (0.25 at 20 m, 1.5 at
+   * the line). Pays for the attempt, not the goal.
+   */
+  shotOnTarget: number;
 }
 
 export interface TrainingEnvOptions {

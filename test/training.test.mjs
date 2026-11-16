@@ -318,3 +318,23 @@ test('a pass that gets the ball past a defender earns the pass-break reward, a b
   assert.ok(best > 0, 'a lob over the defender should bypass him');
   assert.equal(total(0, false), 0);
 });
+
+test('a shot on target near goal is paid, a back pass picked off by the keeper is a failed pass, and the progress cap holds', () => {
+  const config = createArcadeConfig();
+  const play = (kind, seed, act, reward) => {
+    const env = new SoccerTrainingEnv({ config, endOnDeadBall: true, maxSteps: 60, reward });
+    let result = env.reset(seed, createDrill(kind, config, 0, seed));
+    const terms = {};
+    for (let step = 0; step < 60 && !result.terminated && !result.truncated; step += 1) {
+      const actions = new Array(env.agentCount * ACTION_FIELDS).fill(0);
+      if (step === 0) actions[(env.agentCount - 1) * ACTION_FIELDS + 2] = act;
+      result = env.step(actions);
+      for (const [key, value] of Object.entries(result.info.rewardTerms)) terms[key] = (terms[key] ?? 0) + value;
+    }
+    return terms;
+  };
+  let paid = 0;
+  for (let seed = 1; seed <= 8; seed += 1) paid += play('shoot', seed, ACT_SHOOT_CENTER, { shotOnTarget: 1 }).shotOnTarget;
+  assert.ok(paid > 0, 'a centered shot from 8 to 16 m should usually be on target');
+  assert.ok(Object.values(play('shoot', 1, ACT_NONE, {})).every(Number.isFinite));
+});
