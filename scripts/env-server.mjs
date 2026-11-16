@@ -11,7 +11,10 @@
 // reward f32[E], done u8[E], score i32[E*2] (own, opponent; valid when done), steps i32[E] (length of the ended episode,
 // or -1 when the engine failed and the episode was dropped), opponent i32[E] (pool ID of the ended episode's
 // opponent), teacher u8[E*A*3] (with the `teacher` option: the
-// [move, sprint, act] a baseline profile would pick in the returned state, for imitation; zeros otherwise).
+// [move, sprint, act] a baseline profile would pick in the returned state, for imitation; zeros otherwise),
+// pure u8[E] (1 when the returned observation belongs to a pure drill episode, see pureDrills).
+// Option pureDrills (with drillMix): drill kinds whose episodes are "pure": goal-only reward, and they end when anyone but
+// the carrier touches the ball. The trainer should learn only from the carrier's samples in them.
 // An environment that ends is reset at once, so the returned observation starts the next episode.
 import { readFileSync } from "node:fs";
 import {
@@ -20,6 +23,11 @@ import {
   SoccerTrainingEnv, writeActionMask,
 } from "../dist/index.js";
 
+/** Every reward term off but scoring. */
+const PURE_REWARD = {
+  goalScored: 1, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0,
+  passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0,
+};
 const INIT = 1, RESET = 2, STEP = 3, CLOSE = 4, SET_POOL = 5;
 let slots = [];
 let layout;
@@ -114,17 +122,20 @@ function begin(slot, seed) {
   // With drillMix, some episodes are short drills (ending on a goal or dead ball) instead of whole matches.
   const mix = slots.options.drillMix;
   const drill = slots.options.drill ?? (mix && slot.random() < mix.p ? mix.kinds[Math.floor(slot.random() * mix.kinds.length)] : undefined);
-  const key = `${slot.side}|${opponent.spec}|${drill ? "drill" : "match"}`;
+  const pure = !slots.options.drill && drill !== undefined && (slots.options.pureDrills ?? []).includes(drill);
+  const key = `${slot.side}|${opponent.spec}|${pure ? "pure" : drill ? "drill" : "match"}`;
   if (!slot.envs.has(key)) {
     // A rondo has no goal: it ends after 90 steps, and holding the ball earns its own reward instead of progress.
     const rondo = drill === "rondo" && !slots.options.drill;
     const envOptions = drill && !slots.options.drill ? {
       ...slots.options, drill, maxSteps: rondo ? 90 : mix.maxSteps ?? 60,
-      reward: rondo ? { ...slots.options.reward, possession: 0.01, ballProgress: 0 } : slots.options.reward,
+      reward: rondo ? { ...slots.options.reward, possession: 0.01, ballProgress: 0 } : pure ? PURE_REWARD : slots.options.reward,
+      endOnBallLoss: pure || slots.options.endOnBallLoss,
     } : slots.options;
     slot.envs.set(key, makeEnv(envOptions, slot.side === 0 ? "home" : "away", opponent.spec));
   }
   slot.current = slot.envs.get(key);
+  slot.pure = pure;
   slot.opponentId = opponent.id;
   slot.steps = 0;
   const { teacher } = slots.options;
@@ -178,7 +189,7 @@ function payload(results, ended) {
   const sizes = {
     obs: envs * agents * obsSize * 4, mask: pad(envs * agents * actCount), agentMask: pad(envs * agents),
     reward: envs * 4, done: pad(envs), score: envs * 8, steps: envs * 4, opponent: envs * 4,
-    teacher: pad(envs * agents * 3),
+    teacher: pad(envs * agents * 3), pure: pad(envs),
   };
   const total = Object.values(sizes).reduce((sum, value) => sum + value, 0);
   const buffer = new ArrayBuffer(total);
@@ -193,6 +204,8 @@ function payload(results, ended) {
   const steps = new Int32Array(buffer, take(sizes.steps), envs);
   const opponent = new Int32Array(buffer, take(sizes.opponent), envs);
   const teacher = new Uint8Array(buffer, take(sizes.teacher), envs * agents * 3);
+  const pure = new Uint8Array(buffer, take(sizes.pure), envs);
+  slots.forEach((slot, index) => { pure[index] = slot.pure ? 1 : 0; });
   if (slots.options.teacher) slots.forEach((slot, index) => teacher.set(teach(slot), index * agents * 3));
   results.forEach((result, index) => {
     obs.set(result.observation, index * agents * obsSize);
