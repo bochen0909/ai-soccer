@@ -304,3 +304,11 @@ Rewards added: save (0.3), failed pass (-0.05), out of bounds (-0.05), shot on t
 Head to head vs gen12, 128 matches each: gen12 won by 0.54, 0.34 and 0.34 on three seed sets, so gen13 is weaker. Not promoted (model kept in `models/candidates/role_gen13.json`). Keeper saves in matches stayed at 0.00; out-of-bounds exits by us were unchanged (3.2 per match); goals scored against tuned fell (2.54 to 1.63).
 
 Measurement correction: the earlier "passes per match" figure (6 to 9) counted any received ball whose flight came from any kick, including the opponent's clearances and interceptions. Counting only a teammate receiving a teammate's kick, gen12 completes about 0.4 passes per match; the ball reaches an opponent about as often (0.38 received, 0.7 miscontrolled). Passing is rare and mostly fails, which matches what is seen in the browser.
+
+## Keeper save decoding, generations 14 and 15
+
+Gen14 (init gen12, save bonus 0.3, keeper drill at 7 of 27 slots) was level with gen12 (gen12 lost by 0.29, 0.09 and won by 0.09) and saved 0.03 per match: the reward alone could not teach saves, because the save act was aimed 0.2 s ahead of the ball and could be picked at any time. Not promoted.
+
+Fix (decoder and mask, not engine or weights): `keeperSaveAim` (the scripted keeper's per-tick prediction, exported from `baseline.ts`) now gates the save act, which is legal only when a save started now could reach the ball, and aims it. With no retraining gen12's saves rose from 0.03 to 0.20 per match (19%; the Hard keeper saves about 31%).
+
+Gen15: same recipe as gen14 on the new decoding, init gen12. Head to head vs gen12, 128 matches each (gen12 listed first): -0.14, -0.19, -0.33 on three seed sets, so gen15 wins each. Goals conceded per match against tuned 0.75 (gen12 1.08); true pass completions per match 1.08 (0.67). In the isolated keeper test it saves 0.07 per match against gen12's 0.20 but concedes fewer goals (0.63 against 0.83), so it covers shots better in other ways. Promoted.
