@@ -8,6 +8,8 @@ import { registerNeuralPolicy } from "../controllers/neural.js";
 import type { PolicyWeights } from "../controllers/neural.js";
 import { createDefaultAIRegistry, MatchSession } from "../session/match-session.js";
 import type { HumanInput, SessionSnapshot } from "../session/contracts.js";
+import { createDrill } from "../training/drills.js";
+import type { DrillKind } from "../training/drills.js";
 import { FixedStepClock } from "./fixed-step.js";
 import { KeyboardControls } from "./keyboard.js";
 
@@ -37,6 +39,7 @@ const shotMeter = element("shot-meter");
 const shotPower = element("shot-power");
 const matchTitle = element("match-title");
 const matchFormat = element<HTMLSelectElement>("match-format");
+const drillSelect = element<HTMLSelectElement>("drill");
 const homeControl = element<HTMLSelectElement>("home-control");
 const awayControl = element<HTMLSelectElement>("away-control");
 const homeTag = element("home-tag");
@@ -75,8 +78,20 @@ const pinnedSeed = new URLSearchParams(location.search).get("seed");
 const nextSeed = (): number => pinnedSeed !== null && Number.isInteger(Number(pinnedSeed))
   ? Number(pinnedSeed) >>> 0 : Math.floor(Math.random() * 0x100000000);
 
+/** A drill plays from a built position, so it is watch-only and only exists in the 5-a-side format. */
+function activeDrill(): DrillKind | undefined {
+  return matchFormat.value === "quick" && drillSelect.value !== "" ? drillSelect.value as DrillKind : undefined;
+}
+const DRILL_MAX_TICKS = 900;
+let drillStartTick = 0;
+
+const requestedDrill = new URLSearchParams(location.search).get("drill");
+if (requestedDrill !== null && Array.from(drillSelect.options).some((option) => option.value === requestedDrill)) {
+  drillSelect.value = requestedDrill;
+}
+
 function humanControlled(): boolean {
-  return homeControl.value === "human";
+  return homeControl.value === "human" && activeDrill() === undefined;
 }
 
 function profileOf(select: HTMLSelectElement): AIProfileId {
@@ -93,13 +108,22 @@ function resetSession(): void {
     [config.teams[0].id]: profileTeamOptions(humanControlled() ? "default" : profileOf(homeControl)),
     [config.teams[1].id]: profileTeamOptions(profileOf(awayControl)),
   };
-  session.reset(config, nextSeed(), humanControlled() ? { human: { teamId, playerId: taker.id }, teams } : { teams });
+  const seed = nextSeed();
+  const drill = activeDrill();
+  const scenario = drill === undefined ? undefined : createDrill(drill, config, 0, seed);
+  session.reset(config, seed, humanControlled() ? { human: { teamId, playerId: taker.id }, teams } : { teams }, scenario);
+  drillStartTick = session.snapshot().tick;
 }
 
 /** Tuned profiles only apply to formats they were tuned for. Falls back to the default profile otherwise. */
 function syncControlOptions(): void {
   const playersPerSide = config.teams[0].players.length;
-  for (const select of [homeControl, awayControl]) {
+  drillSelect.addEventListener("change", () => {
+  syncControlOptions();
+  resetMatch();
+  showReady();
+});
+for (const select of [homeControl, awayControl]) {
     for (const option of Array.from(select.options)) {
       if (isAIProfileId(option.value)) {
         option.disabled = !profileSupports(option.value, playersPerSide) || (option.value === "trained" && !trainedReady);
@@ -107,6 +131,12 @@ function syncControlOptions(): void {
     }
     if (select.selectedOptions[0]?.disabled) select.value = "default";
   }
+  const drilling = activeDrill() !== undefined;
+  drillSelect.disabled = matchFormat.value !== "quick";
+  if (matchFormat.value !== "quick") drillSelect.value = "";
+  const humanOption = Array.from(homeControl.options).find((option) => option.value === "human");
+  if (humanOption) humanOption.disabled = drilling;
+  if (drilling && homeControl.value === "human") homeControl.value = trainedReady ? "trained" : "tuned";
   homeTag.textContent = humanControlled() ? "YOU" : "CPU";
   awayTag.textContent = "CPU";
   playerCard.hidden = !humanControlled();
@@ -173,8 +203,11 @@ function showReady(): void {
   mode = "ready";
   pauseButton.disabled = true;
   pauseButton.textContent = "Pause";
-  matchTitle.textContent = matchFormat.value === "full" ? "Full Match" : "Quick Match";
-  showGate("Ready for kickoff?",
+  const drill = activeDrill();
+  matchTitle.textContent = drill !== undefined ? `Drill · ${drillSelect.selectedOptions[0]?.textContent?.replace("Drill · ", "") ?? drill}` :
+    matchFormat.value === "full" ? "Full Match" : "Quick Match";
+  if (drill !== undefined) showGate("Ready?", "Watch the drill. It ends on a goal, a dead ball or after 15 seconds.", "Start drill");
+  else showGate("Ready for kickoff?",
     humanControlled() ? "Take control of Ember FC." : "Watch Ember FC play Tidal FC.", "Kick off");
 }
 
@@ -192,6 +225,10 @@ function finish(snapshot: SessionSnapshot): void {
   input.clear();
   pauseButton.disabled = true;
   const [home, away] = snapshot.score;
+  if (activeDrill() !== undefined) {
+    showGate("Drill complete", home > away ? "Ember FC scored" : away > home ? "Tidal FC scored" : "No goal", "Next drill");
+    return;
+  }
   const result = home === away ? "Draw" : home > away ? "Ember FC wins" : "Tidal FC wins";
   showGate("Full time", `${result} · ${home}–${away}`, "Play again");
 }
@@ -299,7 +336,9 @@ function draw(now: number): void {
           (event.phase.kind === "restartSetup" || event.phase.kind === "kickoffSetup"));
         if (placed) renderer.resetBallRotation();
         else renderer.advanceBallRotation(previous, snapshot);
-        return { snapshot, align: placed, finished: result.status === "finished" };
+        const drillOver = activeDrill() !== undefined && (snapshot.tick - drillStartTick >= DRILL_MAX_TICKS ||
+          result.events.some((event) => event.kind === "goal" || event.kind === "ballExit"));
+        return { snapshot, align: placed, finished: result.status === "finished" || drillOver };
       });
       if (frame.finished) finish(frame.current);
       else if (frame.pauseReason) {
