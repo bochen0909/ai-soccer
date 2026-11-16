@@ -24,7 +24,8 @@ const server = createServer(async (request, response) => {
     const relative = pathname === "/" ? "browser/index.html" : pathname.slice(1);
     const file = resolve(root, relative);
     const allowed = file === resolve(root, "browser/index.html") ||
-      file === resolve(root, "browser/match.css") || file === resolve(root, "models/trained-5v5.json") || file.startsWith(resolve(root, "dist") + sep);
+      file === resolve(root, "browser/match.css") || file === resolve(root, "models/trained-5v5.json") ||
+      /^models[\\/](anchors|candidates)[\\/][\w.-]+\.json$/.test(relative) || file.startsWith(resolve(root, "dist") + sep);
     const type = types[extname(file)];
     if (!allowed || !type || !(await stat(file)).isFile()) {
       response.writeHead(404).end("Not found");

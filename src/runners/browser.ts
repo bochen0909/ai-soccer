@@ -54,7 +54,11 @@ const registry = createDefaultAIRegistry();
 let trainedReady = false;
 try {
   // The trained policy is a 600 KB file. Without it the page still works, just without the Trained option.
-  const response = await fetch("/models/trained-5v5.json");
+  // Add ?model=candidates/role_gen13 (or anchors/gen12-role_gen12) to the address to play against another policy.
+  const requested = new URLSearchParams(location.search).get("model");
+  const path = requested !== null && /^(anchors|candidates)\/[\w.-]+$/.test(requested)
+    ? `/models/${requested}.json` : "/models/trained-5v5.json";
+  const response = await fetch(path);
   if (response.ok) {
     registerNeuralPolicy(registry, (await response.json()) as PolicyWeights);
     trainedReady = true;
