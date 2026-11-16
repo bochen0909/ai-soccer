@@ -73,6 +73,7 @@ export function createArcadeConfig(): MatchConfig {
       restartExclusionM: 3,
       restartSupportM: 7,
       headerContact: true,
+      directionalKickoff: true,
       randomKickoff: true,
     },
     tuning: { version: 2 },

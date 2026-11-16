@@ -1,11 +1,11 @@
 import type { MatchConfig, ScenarioDefinition, ScenarioPlayerState, Vec2 } from "../contracts/index.js";
 
-export type DrillKind = "shoot" | "attack" | "pass" | "three" | "counter" | "defend" | "defend2" | "giveandgo" | "rondo" | "keeper" | "cross" | "lob";
+export type DrillKind = "shoot" | "attack" | "pass" | "three" | "counter" | "defend" | "defend2" | "giveandgo" | "rondo" | "keeper" | "cross" | "lob" | "lane";
 
 const MIN_SPACING_M = 1.2;
 const MAX_PLACEMENT_ATTEMPTS = 50;
 
-export const DRILL_KINDS: readonly DrillKind[] = ["shoot", "attack", "pass", "three", "counter", "defend", "defend2", "giveandgo", "rondo", "keeper", "cross", "lob"];
+export const DRILL_KINDS: readonly DrillKind[] = ["shoot", "attack", "pass", "three", "counter", "defend", "defend2", "giveandgo", "rondo", "keeper", "cross", "lob", "lane"];
 
 /** Small deterministic generator so the same seed always builds the same drill. */
 function random(seed: number): () => number {
@@ -129,6 +129,19 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
       const [marker, presser, ...rest] = foes;
       if (marker) put(marker.id, goalX - between(5, 8), -side * between(2, 5));
       if (presser) put(presser.id, ballAt.x - between(4, 7), ballAt.y - side * between(1, 3));
+      rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
+    } else if (kind === "lane") {
+      // Two outlets: one straight ahead behind a defender who blocks the lane, one to the side with a clear lane.
+      const side = next() < 0.5 ? -1 : 1;
+      ballAt = { x: goalX - between(20, 26), y: side * between(0, 4) };
+      put(carrier.id, ballAt.x - 0.45, ballAt.y);
+      const [blocked, free] = mates;
+      if (blocked) put(blocked.id, ballAt.x + between(8, 11), ballAt.y + between(-1, 1));
+      if (free) put(free.id, ballAt.x + between(3, 6), ballAt.y - side * between(7, 10));
+      mates.slice(2).forEach((mate, index) => put(mate.id, -8 - 3 * index, (index % 2 ? 1 : -1) * between(6, 12)));
+      const [wall, presser, ...rest] = foes;
+      if (wall) put(wall.id, ballAt.x + between(4, 5.5), ballAt.y + between(-0.5, 0.5));
+      if (presser) put(presser.id, ballAt.x - between(2.5, 3.5), ballAt.y + between(-1.5, 1.5));
       rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
     } else if (kind === "lob") {
       // A defender stands in the passing lane and a runner waits behind him: only a high ball gets through.
