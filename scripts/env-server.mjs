@@ -12,14 +12,17 @@
 // or -1 when the engine failed and the episode was dropped), opponent i32[E] (pool ID of the ended episode's
 // opponent), teacher u8[E*A*3] (with the `teacher` option: the
 // [move, sprint, act] a baseline profile would pick in the returned state, for imitation; zeros otherwise),
-// pure u8[E] (1 when the returned observation belongs to a pure drill episode, see pureDrills).
-// Option pureDrills (with drillMix): drill kinds whose episodes are "pure": goal-only reward, and they end when anyone but
-// the carrier touches the ball. The trainer should learn only from the carrier's samples in them.
+// pure u8[E] (0, or 1 + the index in pureDrills of the drill the returned observation belongs to), learn u8[E] (in a pure
+// drill, a bit mask of the roster slots to learn from: the carrier and the runner, who are drawn at random from the outfield
+// players in "shoot", "pass" and "attack"; 0 outside pure drills).
+// Option pureDrills (alone with drill, or with drillMix): drill kinds whose episodes are "pure": the only rewards are the goal
+// and the first completed pass, per kind in PURE_REWARDS (options.pureRewards overrides; in "attack" the goal pays only after that pass, goalNeedsPass: false lifts this); they end when a rival touches the
+// ball. The trainer should learn only from the players who matter in them (the carrier, plus the runner in "attack").
 // An environment that ends is reset at once, so the returned observation starts the next episode.
 import { readFileSync } from "node:fs";
 import {
   AI_PROFILES, BaselineTeamAI, buildAgentContexts, createActionSpace, createArcadeConfig, createDefaultAIRegistry,
-  createDrill, createElevenAsideConfig, mirrorScenario, decodeWeights, intentToChoice, profileTeamOptions, registerNeuralNetwork,
+  createDrillWithRoles, createElevenAsideConfig, mirrorScenario, decodeWeights, intentToChoice, profileTeamOptions, registerNeuralNetwork,
   SoccerTrainingEnv, writeActionMask,
 } from "../dist/index.js";
 
@@ -28,6 +31,8 @@ const PURE_REWARD = {
   goalScored: 1, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0,
   passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0,
 };
+/** Per pure drill: shoot pays the goal, pass pays the first completed pass, attack pays both (the goal only after the pass). */
+const PURE_REWARDS = { shoot: { goalScored: 1 }, pass: { passCompleted: 1 }, attack: { passCompleted: 0.5, goalScored: 0.5 } };
 const INIT = 1, RESET = 2, STEP = 3, CLOSE = 4, SET_POOL = 5;
 let slots = [];
 let layout;
@@ -60,7 +65,7 @@ function makeEnv(options, learnerTeamId, spec) {
   }
   return new SoccerTrainingEnv({
     config, learnerTeamId, opponent, registry,
-    ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward,
+    ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward, passBonusOnce: options.passBonusOnce, goalNeedsPass: options.goalNeedsPass,
     maxPlayersPerTeam: options.maxPlayersPerTeam, roleFeatures: options.roleFeatures, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall, endOnBallLoss: options.endOnBallLoss,
   });
 }
@@ -122,16 +127,22 @@ function begin(slot, seed) {
   // With drillMix, some episodes are short drills (ending on a goal or dead ball) instead of whole matches.
   const mix = slots.options.drillMix;
   const drill = slots.options.drill ?? (mix && slot.random() < mix.p ? mix.kinds[Math.floor(slot.random() * mix.kinds.length)] : undefined);
-  const pure = !slots.options.drill && drill !== undefined && (slots.options.pureDrills ?? []).includes(drill);
-  const key = `${slot.side}|${opponent.spec}|${pure ? "pure" : drill ? "drill" : "match"}`;
+  const pure = drill === undefined ? 0 : (slots.options.pureDrills ?? []).indexOf(drill) + 1;
+  const key = `${slot.side}|${opponent.spec}|${pure ? "pure-" + drill : drill ? "drill" : "match"}`;
   if (!slot.envs.has(key)) {
     // A rondo has no goal: it ends after 90 steps, and holding the ball earns its own reward instead of progress.
     const rondo = drill === "rondo" && !slots.options.drill;
-    const envOptions = drill && !slots.options.drill ? {
+    let envOptions = drill && !slots.options.drill ? {
       ...slots.options, drill, maxSteps: rondo ? 90 : mix.maxSteps ?? 60,
-      reward: rondo ? { ...slots.options.reward, possession: 0.01, ballProgress: 0 } : pure ? PURE_REWARD : slots.options.reward,
-      endOnBallLoss: pure || slots.options.endOnBallLoss,
+      reward: rondo ? { ...slots.options.reward, possession: 0.01, ballProgress: 0 } : slots.options.reward,
     } : slots.options;
+    if (pure) {
+      envOptions = { ...envOptions };
+      envOptions.reward = { ...PURE_REWARD, ...(slots.options.pureRewards?.[drill] ?? PURE_REWARDS[drill] ?? { goalScored: 1 }) };
+      envOptions.endOnBallLoss = true;
+      envOptions.passBonusOnce = true;
+      envOptions.goalNeedsPass = drill === "attack" && slots.options.goalNeedsPass !== false;
+    }
     slot.envs.set(key, makeEnv(envOptions, slot.side === 0 ? "home" : "away", opponent.spec));
   }
   slot.current = slot.envs.get(key);
@@ -150,8 +161,13 @@ function begin(slot, seed) {
     const episodeSeed = (seed ?? seedFor(slot)) + attempt * 15_485_863 >>> 0;
     try {
       // Drills start from a built situation. Without one, the match starts from kickoff.
-      const scenario = drill === "replay" ? replayScenario(slot.side, episodeSeed)
-        : drill ? createDrill(drill, slot.current.config, slot.side, episodeSeed) : undefined;
+      const made = drill === "replay" ? { scenario: replayScenario(slot.side, episodeSeed) }
+        : drill ? createDrillWithRoles(drill, slot.current.config, slot.side, episodeSeed) : undefined;
+      const scenario = made?.scenario;
+      // The roster slots the trainer learns from in a pure drill: the carrier, and the runner where there is one.
+      const roster = slot.current.config.teams[slot.side].players;
+      const slotBit = (id) => id === undefined ? 0 : 1 << roster.findIndex((player) => player.id === id);
+      slot.learn = pure ? slotBit(made.carrierId) | (drill === "shoot" ? 0 : slotBit(made.runnerId)) : 0;
       slot.last = slot.current.reset(episodeSeed, scenario);
       break;
     } catch (error) {
@@ -189,7 +205,7 @@ function payload(results, ended) {
   const sizes = {
     obs: envs * agents * obsSize * 4, mask: pad(envs * agents * actCount), agentMask: pad(envs * agents),
     reward: envs * 4, done: pad(envs), score: envs * 8, steps: envs * 4, opponent: envs * 4,
-    teacher: pad(envs * agents * 3), pure: pad(envs),
+    teacher: pad(envs * agents * 3), pure: pad(envs), learn: pad(envs),
   };
   const total = Object.values(sizes).reduce((sum, value) => sum + value, 0);
   const buffer = new ArrayBuffer(total);
@@ -205,7 +221,8 @@ function payload(results, ended) {
   const opponent = new Int32Array(buffer, take(sizes.opponent), envs);
   const teacher = new Uint8Array(buffer, take(sizes.teacher), envs * agents * 3);
   const pure = new Uint8Array(buffer, take(sizes.pure), envs);
-  slots.forEach((slot, index) => { pure[index] = slot.pure ? 1 : 0; });
+  const learn = new Uint8Array(buffer, take(sizes.learn), envs);
+  slots.forEach((slot, index) => { pure[index] = slot.pure; learn[index] = slot.learn ?? 0; });
   if (slots.options.teacher) slots.forEach((slot, index) => teacher.set(teach(slot), index * agents * 3));
   results.forEach((result, index) => {
     obs.set(result.observation, index * agents * obsSize);

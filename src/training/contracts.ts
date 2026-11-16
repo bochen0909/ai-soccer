@@ -95,10 +95,14 @@ export interface TrainingEnvOptions {
   /** End the episode as soon as a goal is scored or the ball leaves play. Meant for short drills. */
   endOnDeadBall?: boolean;
   /**
-   * End the episode when anyone but the scenario's ball carrier (`ball.lastTouchPlayerId`) touches the ball: a tackle, an
-   * interception, a keeper catch or parry. Goals and the ball leaving play already end a drill via `endOnDeadBall`.
+   * End the episode when a rival touches the ball: a tackle, an interception, a keeper catch or parry. Goals and the ball
+   * leaving play already end a drill via `endOnDeadBall`.
    */
   endOnBallLoss?: boolean;
+  /** Pay the pass bonus once per episode, so passing back and forth cannot farm it. */
+  passBonusOnce?: boolean;
+  /** A goal pays only after a learner pass has been completed in the episode. */
+  goalNeedsPass?: boolean;
 }
 
 export interface StepInfo {

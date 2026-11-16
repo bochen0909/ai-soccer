@@ -22,7 +22,8 @@ class Batch:
     steps: np.ndarray       # [envs] int32, length of the ended episode, or -1 if the engine failed and it was dropped
     opponent: np.ndarray    # [envs] int32, pool ID of the opponent in the ended episode
     teacher: np.ndarray     # [envs, agents, 3] uint8, what the `teacher` profile would do now (move, sprint, act); zeros if unset
-    pure: np.ndarray        # [envs] bool, the episode these obs belong to is a pure drill (goal-only reward, striker-only learning)
+    pure: np.ndarray        # [envs] uint8, 0, or 1 + the index in `pureDrills` of the pure drill these obs belong to
+    learn: np.ndarray       # [envs] uint8, in a pure drill a bit mask of the roster slots to learn from, else 0
 
 
 class _Server:
@@ -106,8 +107,9 @@ class SoccerVecEnv:
         steps = take(np.int32, e, e * 4)
         opponent = take(np.int32, e, e * 4)
         teacher = take(np.uint8, e * a * 3, pad(e * a * 3)).reshape(e, a, 3)
-        pure = take(np.uint8, e, pad(e)).astype(bool)
-        return Batch(obs.copy(), mask, agent_mask, reward.copy(), done, score.copy(), steps.copy(), opponent.copy(), teacher.copy(), pure.copy())
+        pure = take(np.uint8, e, pad(e))
+        learn = take(np.uint8, e, pad(e))
+        return Batch(obs.copy(), mask, agent_mask, reward.copy(), done, score.copy(), steps.copy(), opponent.copy(), teacher.copy(), pure.copy(), learn.copy())
 
     def set_pool(self, pool):
         """Sets the opponents later episodes are drawn from: a list of {"id", "spec", "weight"}.

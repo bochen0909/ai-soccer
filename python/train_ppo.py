@@ -116,9 +116,14 @@ def main():
     parser.add_argument("--striker-only", action="store_true",
                         help="drills: update the policy only from the last player on the team (the drill's ball carrier); "
                              "the other players still act with the same policy but their samples are ignored")
-    parser.add_argument("--pure-drills", nargs="+", default=None, choices=["shoot", "attack", "pass", "three", "counter", "lane"],
-                        help="with --drill-mix: episodes of these drill kinds use a goal-only reward, end when anyone but the carrier "
-                             "touches the ball, and update the policy only from the carrier's samples. Other episodes are unchanged")
+    parser.add_argument("--pure-drills", nargs="+", default=None, choices=["shoot", "attack", "pass"],
+                        help="episodes of these drill kinds (alone with --drill, or with --drill-mix) are pure: the only rewards are the goal "
+                             "and, for attack and pass, a pass bonus paid once; they end when a rival touches the ball; the policy learns only from the "
+                             "carrier (shoot) or the carrier and the runner (attack, pass). Other episodes are unchanged")
+    parser.add_argument("--solo-goals", action="store_true", help="pure drills other than shoot: a goal also pays without a completed pass")
+    parser.add_argument("--pure-rewards", default=None,
+                        help='JSON overriding the per-drill rewards of pure drills, e.g. \'{"attack": {"passCompleted": 0.5, "goalScored": 0.5}}\'. '
+                             'Defaults: shoot goal 1, pass first completed pass 1, attack pass 0.5 and goal 0.5 (the goal only after the pass)')
     parser.add_argument("--value-warmup", type=int, default=0,
                         help="iterations that train only the value head, so a pretrained policy is not wrecked by a random critic")
     parser.add_argument("--league-anchor", nargs="+", default=None,
@@ -170,9 +175,13 @@ def main():
     elif args.max_steps:
         options["maxSteps"] = args.max_steps
     if args.pure_drills:
-        if args.drill_mix <= 0 or args.drill:
-            raise SystemExit("--pure-drills needs --drill-mix and no --drill")
+        if args.drill and args.drill not in args.pure_drills or not args.drill and args.drill_mix <= 0:
+            raise SystemExit("--pure-drills needs --drill-mix, or --drill with a kind listed in --pure-drills")
         options["pureDrills"] = args.pure_drills
+        if args.pure_rewards:
+            options["pureRewards"] = json.loads(args.pure_rewards)
+        if args.solo_goals:
+            options["goalNeedsPass"] = False
     if (args.pure_goal or args.end_on_ball_loss or args.striker_only) and not args.drill:
         raise SystemExit("--pure-goal, --end-on-ball-loss and --striker-only need --drill")
     if args.drill_mix > 0 and not args.drill:
@@ -216,7 +225,7 @@ def main():
         options["pool"] = pool_message()
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
     eval_shape = (8, max(1, args.eval_envs // 8))
-    evals = {name: SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None, "drillMix": None, "pureDrills": None})
+    evals = {name: SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None, "drillMix": None, "pureDrills": None, "endOnBallLoss": None, "goalNeedsPass": None})
              for name, spec in eval_specs.items()}
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count
     T = args.rollout
@@ -236,13 +245,14 @@ def main():
         for iteration in range(1, args.iterations + 1):
             for group in optimizer.param_groups:
                 group["lr"] = args.lr * (1 - (iteration - 1) / args.iterations)
-            store = {k: [] for k in ("obs", "mask", "act", "logp", "val", "rew", "done", "agent", "pure")}
+            store = {k: [] for k in ("obs", "mask", "act", "logp", "val", "rew", "done", "agent", "pure", "learn")}
             for _ in range(T):
                 actions, logp, value = act(policy, batch, device)
                 store["obs"].append(batch.obs); store["mask"].append(batch.mask)
                 store["act"].append(actions.numpy()); store["logp"].append(logp.numpy())
                 store["val"].append(value.numpy()); store["agent"].append(batch.agent_mask)
                 store["pure"].append(batch.pure)
+                store["learn"].append(batch.learn)
                 batch = env.step(actions.numpy())
                 store["rew"].append(batch.reward); store["done"].append(batch.done)
                 ok = batch.done & (batch.steps >= 0)
@@ -271,13 +281,14 @@ def main():
             returns = adv + val
 
             agents_used = np.stack(store["agent"])             # [T, E, A]
-            # The drill's carrier is the last outfield player, which is the last roster slot.
-            only = np.zeros(A, dtype=bool); only[A - 1] = True
             if args.striker_only:
+                only = np.zeros(A, dtype=bool); only[A - 1] = True
                 agents_used = agents_used & only
             if args.pure_drills:
-                pure = np.stack(store["pure"])[..., None]      # [T, E, 1]: this sample's episode is a pure drill
-                agents_used = agents_used & (~pure | only)
+                # In a pure drill only the carrier and the runner learn; the env reports them as a bit mask of roster slots.
+                learn = np.stack(store["learn"])[..., None]    # [T, E, 1]
+                bits = ((learn >> np.arange(A)) & 1).astype(bool)
+                agents_used = agents_used & ((learn == 0) | bits)
             agent = agents_used.reshape(-1)
             flat = lambda x: torch.as_tensor(np.stack(x) if isinstance(x, list) else x).reshape(-1, *np.shape(x[0])[2:])[agent]
             b_obs, b_mask, b_act = flat(store["obs"]), flat(store["mask"]), flat(store["act"])

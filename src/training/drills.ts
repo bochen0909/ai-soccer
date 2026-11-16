@@ -41,6 +41,16 @@ function random(seed: number): () => number {
  * Everyone else holds a spot away from the action. The striker is the last player on the roster.
  */
 export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 0 | 1, seed: number): ScenarioDefinition {
+  return createDrillWithRoles(kind, config, learnerIndex, seed).scenario;
+}
+
+/** Drills whose carrier, and runner where there is one, are drawn at random from the learner's outfield players. */
+export const RANDOM_ROLE_DRILLS: readonly DrillKind[] = ["shoot", "pass", "attack"];
+
+/** Like `createDrill`, and also says who the ball carrier and the runner (the carrier's teammate in the play) are. */
+export function createDrillWithRoles(
+  kind: DrillKind, config: MatchConfig, learnerIndex: 0 | 1, seed: number,
+): { scenario: ScenarioDefinition; carrierId: string; runnerId: string | undefined } {
   const next = random(seed);
   const between = (low: number, high: number) => low + (high - low) * next();
   const attack = learnerIndex === 0 ? 1 : -1;
@@ -63,8 +73,17 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
       spots.slice(i + 1).some(([, b]) => Math.hypot(a.x - b.x, a.y - b.y) < MIN_SPACING_M));
   };
 
-  const carrier = outfield(learner).at(-1)!;
-  const mates = outfield(learner).filter((player) => player !== carrier);
+  const field = outfield(learner);
+  const randomRoles = RANDOM_ROLE_DRILLS.includes(kind);
+  const carrier = randomRoles ? field[Math.floor(next() * field.length)] : field.at(-1)!;
+  const mates = field.filter((player) => player !== carrier);
+  if (randomRoles) {
+    // The first teammate is the runner, so shuffle them.
+    for (let i = mates.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(next() * (i + 1));
+      [mates[i], mates[j]] = [mates[j], mates[i]];
+    }
+  }
   const foes = outfield(rival);
   const attacker = foes.at(-1)!;
   const attackMates = foes.slice(0, -1);
@@ -218,7 +237,7 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
       facingRad: (attack === 1) === (!defending || learnerIds.has(id)) ? 0 : Math.PI,
     };
   });
-  return {
+  const scenario: ScenarioDefinition = {
     version: 1,
     id: `drill-${kind}-${seed}`,
     period: 1,
@@ -231,6 +250,7 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
       control: { kind: "free" },
     },
   };
+  return { scenario, carrierId: carrier.id, runnerId: mates[0]?.id };
 }
 
 const swapTeam = (id: string): string => id.startsWith("home") ? `away${id.slice(4)}` : id.startsWith("away") ? `home${id.slice(4)}` : id;

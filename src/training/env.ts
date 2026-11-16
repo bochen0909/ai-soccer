@@ -60,8 +60,10 @@ export class SoccerTrainingEnv {
   private readonly maxSteps: number;
   private readonly endOnDeadBall: boolean;
   private readonly endOnBallLoss: boolean;
-  /** The player whose possession `endOnBallLoss` protects: the scenario's ball carrier. */
-  private carrierId: PlayerId | undefined;
+  private readonly passBonusOnce: boolean;
+  private readonly goalNeedsPass: boolean;
+  /** A learner pass has been completed in this episode. */
+  private passRewarded = false;
   private readonly learnerPlayers: ReadonlySet<PlayerId>;
   private readonly weights: RewardWeights;
   private readonly registry: TeamAIRegistry;
@@ -96,6 +98,8 @@ export class SoccerTrainingEnv {
     if (!Number.isSafeInteger(this.maxSteps) || this.maxSteps < 1) throw new RangeError("maxSteps must be a positive integer");
     this.endOnDeadBall = options.endOnDeadBall ?? false;
     this.endOnBallLoss = options.endOnBallLoss ?? false;
+    this.passBonusOnce = options.passBonusOnce ?? false;
+    this.goalNeedsPass = options.goalNeedsPass ?? false;
     this.weights = { ...DEFAULT_REWARD, ...options.reward };
     this.opponent = options.opponent ?? { pluginId: "baseline" };
     if (this.opponent.pluginId === "external") throw new RangeError('The opponent cannot use the reserved "external" plugin');
@@ -121,7 +125,7 @@ export class SoccerTrainingEnv {
       },
     }, scenario);
     if (failures.length > 0) throw new Error(`Controller failure: ${failures.map(({ message }) => message).join(" | ")}`);
-    this.carrierId = scenario?.ball.lastTouchPlayerId;
+    this.passRewarded = false;
     this.steps = 0;
     this.done = false;
     this.lastPassTick = -Infinity;
@@ -179,7 +183,7 @@ export class SoccerTrainingEnv {
       for (const event of result.events) {
         if (this.scoreEvent(event, terms)) interrupted = true;
         if (this.endOnDeadBall && (event.kind === "goal" || event.kind === "ballExit")) finished = true;
-        if (this.endOnBallLoss && this.carrierId !== undefined && this.takenFromCarrier(event)) finished = true;
+        if (this.endOnBallLoss && this.rivalTouched(event)) finished = true;
       }
       for (const { action, status } of result.actionResults) {
         if (action.source === "controller") this.feedback.set(action.playerId, FEEDBACK_STATUSES.indexOf(status) + 1);
@@ -222,10 +226,10 @@ export class SoccerTrainingEnv {
     this.done = true;
   }
 
-  /** Someone other than the carrier touched or won the ball. A missed tackle does not count. */
-  private takenFromCarrier(event: MatchEvent): boolean {
-    if (event.kind === "ballTouch") return event.playerId !== this.carrierId;
-    if (event.kind === "actionContact") return event.action.playerId !== this.carrierId && event.outcome !== "missed";
+  /** A rival touched or won the ball: a tackle, an interception, a keeper catch or parry. A missed tackle does not count. */
+  private rivalTouched(event: MatchEvent): boolean {
+    if (event.kind === "ballTouch") return !this.learnerPlayers.has(event.playerId);
+    if (event.kind === "actionContact") return !this.learnerPlayers.has(event.action.playerId) && event.outcome !== "missed";
     return false;
   }
 
@@ -241,7 +245,7 @@ export class SoccerTrainingEnv {
       this.lastTouchLearner = null;
       this.passInFlight = false;
       if (event.teamId === this.learnerTeamId) {
-        terms.goalScored += this.weights.goalScored;
+        if (!this.goalNeedsPass || this.passRewarded) terms.goalScored += this.weights.goalScored;
         if (event.tick - this.lastPassTick <= ASSIST_WINDOW_TICKS) terms.assist += this.weights.assist * this.shapingScale;
       }
       else terms.goalConceded += this.weights.goalConceded;
@@ -287,7 +291,8 @@ export class SoccerTrainingEnv {
     if (event.kind === "ballTouch" && event.outcome === "received" && event.flightAction !== undefined &&
         event.flightAction.playerId !== event.playerId && this.learnerPlayers.has(event.flightAction.playerId) &&
         this.learnerPlayers.has(event.playerId)) {
-      terms.passCompleted += this.weights.passCompleted * this.shapingScale;
+      if (!this.passBonusOnce || !this.passRewarded) terms.passCompleted += this.weights.passCompleted * this.shapingScale;
+      this.passRewarded = true;
       this.passInFlight = false;
       this.lastPassTick = event.tick;
       if (this.kickedPast.size > 0) {

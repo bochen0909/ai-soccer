@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ACT_NONE, ACT_PASS_BASE, ACT_SHOOT_CENTER, ACT_TACKLE, ACTION_FIELDS, createArcadeConfig,
-  createDrill, createElevenAsideConfig, DRILL_KINDS, SoccerTrainingEnv,
+  createDrill, createDrillWithRoles, createElevenAsideConfig, DRILL_KINDS, SoccerTrainingEnv,
 } from '../dist/index.js';
 
 function shortConfig(base = createArcadeConfig()) {
@@ -220,12 +220,14 @@ test('drills build valid situations that play out the same from either side', ()
     const env = new SoccerTrainingEnv({ config, learnerTeamId: side, endOnDeadBall: true, maxSteps: 40 });
     const outcomes = [];
     for (let seed = 1; seed <= 6; seed += 1) {
-      let result = env.reset(seed, createDrill(kind, config, side === 'home' ? 0 : 1, seed));
+      const { scenario, carrierId } = createDrillWithRoles(kind, config, side === 'home' ? 0 : 1, seed);
+      const carrierSlot = config.teams[side === 'home' ? 0 : 1].players.findIndex(({ id }) => id === carrierId);
+      let result = env.reset(seed, scenario);
       const [startHash, startBall] = [env.hashState(), env.observation().ball.position];
       assert.ok(Math.abs(startBall.x) < config.pitch.lengthM / 2);
       while (!result.terminated && !result.truncated) {
         const actions = new Array(env.agentCount * ACTION_FIELDS).fill(0);
-        actions[(env.agentCount - 1) * ACTION_FIELDS] = 1;
+        actions[carrierSlot * ACTION_FIELDS] = 1;
         result = env.step(actions);
       }
       outcomes.push([result.info.step, result.info.score[0], result.reward.toFixed(4)]);
