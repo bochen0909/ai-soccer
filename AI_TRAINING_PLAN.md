@@ -318,3 +318,9 @@ Gen15: same recipe as gen14 on the new decoding, init gen12. Head to head vs gen
 Found: the web app set `directionalKickoff` but training and the arena did not, so in training the kickoff kick went into the taker's body (about 3 self-deflected kicks per match) while the web let the taker step aside. `directionalKickoff: true` is now part of the arcade rules. Gen15 under the new rules: passes reaching a teammate 1.09 to 2.49 per match, but W63 D16 L17 against tuned (was W70 D19 L7), since it was tuned to the old kickoff. Two decoder ideas, a clear-lane gate on ground passes and an open-side centre shot, changed nothing measurable on gen15 and were dropped.
 
 Gen16: init gen15, new `lane` drill (a blocked outlet ahead, a free one to the side), more pass, three and lob drills. Head to head vs gen15 (new rules): gen15 won by 0.52, 0.30 and 0.25 on three seed sets. Against tuned it went W55 D13 L28, GF 1.75, GA 1.16, with more passes reaching a teammate (2.84 against 2.49) but more goals conceded. Not promoted; the candidate is kept.
+
+## Generation 17 (role_gen17) and blends, not promoted
+
+Gen17 = gen15's exact recipe from gen15 on the new kickoff rules. Head to head vs gen15: gen15 won by 0.52, 0.37 and 0.10 on three seed sets. Against tuned: W66 D12 L18, GF 1.96, GA 0.85, passes to a teammate 2.64 (to an opponent 1.61). Retraining on the new rules gave no gain: the run-to-run spread at this level (about 0.3 goals) is as large as the improvements of the last few generations.
+
+Blends of gen15 and gen16 weights (30% and 50% of gen16) were level with gen15 head to head (differences within +/-0.24). The 50% blend against tuned: W66 D17 L13, GF 2.05, GA 0.75, passes 2.77, keeper saves 0.17 per match (gen15 0.03). Kept as `models/candidates/blend_15_16_50.json`; not promoted.
