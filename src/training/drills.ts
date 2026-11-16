@@ -38,14 +38,12 @@ function random(seed: number): () => number {
  *           the carrier is one of the four. There is no goal to score; train it with a reward for holding the ball.
  *   keeper  a lone rival striker with the ball 9 to 18 m from the learner's goal and no defenders, with a second rival
  *           waiting outside the area to press the keeper's release. Trains the learner's keeper.
- * Everyone else holds a spot away from the action. The striker is the last player on the roster.
+ * Everyone else holds a spot away from the action. The learner's outfield players are drawn at random for the roles (carrier,
+ * runner and so on), and so are the rivals' outfield players (the rival striker, defenders and so on). Both keepers keep their place.
  */
 export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 0 | 1, seed: number): ScenarioDefinition {
   return createDrillWithRoles(kind, config, learnerIndex, seed).scenario;
 }
-
-/** Drills whose carrier, and runner where there is one, are drawn at random from the learner's outfield players. */
-export const RANDOM_ROLE_DRILLS: readonly DrillKind[] = ["shoot", "pass", "attack"];
 
 /** Like `createDrill`, and also says who the ball carrier and the runner (the carrier's teammate in the play) are. */
 export function createDrillWithRoles(
@@ -74,17 +72,23 @@ export function createDrillWithRoles(
   };
 
   const field = outfield(learner);
-  const randomRoles = RANDOM_ROLE_DRILLS.includes(kind);
-  const carrier = randomRoles ? field[Math.floor(next() * field.length)] : field.at(-1)!;
+  // Every drill draws its learner outfield players at random (the keeper keeps its place): the ball carrier, then the
+  // teammates in the order the drill uses them (the first is the runner or the near option, and so on).
+  const carrier = field[Math.floor(next() * field.length)];
   const mates = field.filter((player) => player !== carrier);
-  if (randomRoles) {
-    // The first teammate is the runner, so shuffle them.
-    for (let i = mates.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(next() * (i + 1));
-      [mates[i], mates[j]] = [mates[j], mates[i]];
-    }
+  for (let i = mates.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(next() * (i + 1));
+    [mates[i], mates[j]] = [mates[j], mates[i]];
   }
+  /** All learner outfield players in the drawn order, for the drills where the learner defends. */
+  const drawn = [carrier, ...mates];
+  // The rivals' outfield players are drawn too, from their own generator so the placements above stay the same for a seed.
   const foes = outfield(rival);
+  const rivalNext = random((seed ^ 0x5bd1e995) >>> 0);
+  for (let i = foes.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rivalNext() * (i + 1));
+    [foes[i], foes[j]] = [foes[j], foes[i]];
+  }
   const attacker = foes.at(-1)!;
   const attackMates = foes.slice(0, -1);
   const defending = kind === "defend" || kind === "defend2" || kind === "keeper";
@@ -180,7 +184,7 @@ export function createDrillWithRoles(
       const [presser, ...others] = attackMates;
       if (presser) put(presser.id, -goalX + between(11, 15), between(-6, 6));
       others.forEach((foe, index) => put(foe.id, goalX - 6 - 2 * index, (index % 2 ? 1 : -1) * between(8, 14)));
-      outfield(learner).forEach((player, index) => put(player.id, between(2, 10) + 2 * index, (index % 2 ? 1 : -1) * between(4, 12)));
+      drawn.forEach((player, index) => put(player.id, between(2, 10) + 2 * index, (index % 2 ? 1 : -1) * between(4, 12)));
     } else if (kind === "defend" || kind === "defend2") {
       // The rival attacks toward -x, so these coordinates are mirrored relative to the other drills.
       const side = next() < 0.5 ? -1 : 1;
@@ -192,7 +196,7 @@ export function createDrillWithRoles(
       if (three && runnerTwo) put(runnerTwo.id, ballAt.x - between(3, 7), side * between(7, 11));
       else if (runnerTwo) spare.unshift(runnerTwo);
       spare.forEach((foe, index) => put(foe.id, between(2, 10) + 2 * index, (index % 2 ? 1 : -1) * between(4, 12)));
-      const defenders = outfield(learner);
+      const defenders = drawn;
       defenders.forEach((player, index) => {
         if (index === 0) put(player.id, ballAt.x - between(3, 5), ballAt.y + between(-1, 1));
         else if (index === 1 && three) put(player.id, ballAt.x - between(6, 9), -side * between(2, 5));

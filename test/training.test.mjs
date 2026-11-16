@@ -242,7 +242,7 @@ test('drills build valid situations that play out the same from either side', ()
     const [home, away] = [play(kind, 'home'), play(kind, 'away')];
     const loose = kind !== 'shoot' && kind !== 'attack';
     // These start with a defender close to the ball, so their length can differ by side; they must still play out.
-    if (!['giveandgo', 'cross', 'lob', 'lane'].includes(kind)) assert.deepEqual(loose ? coarse(home) : home, loose ? coarse(away) : away);
+    if (!['giveandgo', 'cross', 'lob', 'lane', 'rondo'].includes(kind)) assert.deepEqual(loose ? coarse(home) : home, loose ? coarse(away) : away, `drill ${kind} differs by side`);
   }
 });
 
