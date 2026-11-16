@@ -312,3 +312,9 @@ Gen14 (init gen12, save bonus 0.3, keeper drill at 7 of 27 slots) was level with
 Fix (decoder and mask, not engine or weights): `keeperSaveAim` (the scripted keeper's per-tick prediction, exported from `baseline.ts`) now gates the save act, which is legal only when a save started now could reach the ball, and aims it. With no retraining gen12's saves rose from 0.03 to 0.20 per match (19%; the Hard keeper saves about 31%).
 
 Gen15: same recipe as gen14 on the new decoding, init gen12. Head to head vs gen12, 128 matches each (gen12 listed first): -0.14, -0.19, -0.33 on three seed sets, so gen15 wins each. Goals conceded per match against tuned 0.75 (gen12 1.08); true pass completions per match 1.08 (0.67). In the isolated keeper test it saves 0.07 per match against gen12's 0.20 but concedes fewer goals (0.63 against 0.83), so it covers shots better in other ways. Promoted.
+
+## Directional kickoff in the arcade rules, and generation 16 (role_gen16), not promoted
+
+Found: the web app set `directionalKickoff` but training and the arena did not, so in training the kickoff kick went into the taker's body (about 3 self-deflected kicks per match) while the web let the taker step aside. `directionalKickoff: true` is now part of the arcade rules. Gen15 under the new rules: passes reaching a teammate 1.09 to 2.49 per match, but W63 D16 L17 against tuned (was W70 D19 L7), since it was tuned to the old kickoff. Two decoder ideas, a clear-lane gate on ground passes and an open-side centre shot, changed nothing measurable on gen15 and were dropped.
+
+Gen16: init gen15, new `lane` drill (a blocked outlet ahead, a free one to the side), more pass, three and lob drills. Head to head vs gen15 (new rules): gen15 won by 0.52, 0.30 and 0.25 on three seed sets. Against tuned it went W55 D13 L28, GF 1.75, GA 1.16, with more passes reaching a teammate (2.84 against 2.49) but more goals conceded. Not promoted; the candidate is kept.
