@@ -109,6 +109,13 @@ def main():
     parser.add_argument("--turnover-bonus", type=float, default=0.0, help="reward for winning the ball from the opponent, penalty for losing it")
     parser.add_argument("--assist-bonus", type=float, default=0.0, help="extra reward on a goal scored within 6 s of a completed pass")
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="reward when a teammate receives a pass (drills and full matches)")
+    parser.add_argument("--pure-goal", action="store_true",
+                        help="drills: the only reward is the goal (no progress, possession, pass or other terms)")
+    parser.add_argument("--end-on-ball-loss", action="store_true",
+                        help="drills: the episode also ends when anyone but the starting ball carrier touches the ball")
+    parser.add_argument("--striker-only", action="store_true",
+                        help="drills: update the policy only from the last player on the team (the drill's ball carrier); "
+                             "the other players still act with the same policy but their samples are ignored")
     parser.add_argument("--value-warmup", type=int, default=0,
                         help="iterations that train only the value head, so a pretrained policy is not wrecked by a random critic")
     parser.add_argument("--league-anchor", nargs="+", default=None,
@@ -153,8 +160,14 @@ def main():
         options["drill"] = args.drill
         options["maxSteps"] = args.max_steps or 60
         options["reward"] = {"possession": 0.0, "passCompleted": args.pass_bonus}
+        if args.pure_goal:
+            options["reward"] = {"goalScored": 1.0, "goalConceded": 0.0, "ballProgress": 0.0, "possession": 0.0, "passCompleted": 0.0}
+        if args.end_on_ball_loss:
+            options["endOnBallLoss"] = True
     elif args.max_steps:
         options["maxSteps"] = args.max_steps
+    if (args.pure_goal or args.end_on_ball_loss or args.striker_only) and not args.drill:
+        raise SystemExit("--pure-goal, --end-on-ball-loss and --striker-only need --drill")
     if args.drill_mix > 0 and not args.drill:
         options["drillMix"] = {"p": args.drill_mix, "kinds": args.drill_kinds, "maxSteps": 60}
         if args.replay_file:
@@ -249,7 +262,12 @@ def main():
                 next_value = val[t]
             returns = adv + val
 
-            agent = np.stack(store["agent"]).reshape(-1)
+            agents_used = np.stack(store["agent"])             # [T, E, A]
+            if args.striker_only:
+                # The drill's carrier is the last outfield player, which is the last roster slot.
+                only = np.zeros(A, dtype=bool); only[A - 1] = True
+                agents_used = agents_used & only
+            agent = agents_used.reshape(-1)
             flat = lambda x: torch.as_tensor(np.stack(x) if isinstance(x, list) else x).reshape(-1, *np.shape(x[0])[2:])[agent]
             b_obs, b_mask, b_act = flat(store["obs"]), flat(store["mask"]), flat(store["act"])
             b_logp = torch.as_tensor(np.stack(store["logp"]).reshape(-1)[agent])

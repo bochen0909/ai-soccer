@@ -94,6 +94,11 @@ export interface TrainingEnvOptions {
   reward?: Partial<RewardWeights>;
   /** End the episode as soon as a goal is scored or the ball leaves play. Meant for short drills. */
   endOnDeadBall?: boolean;
+  /**
+   * End the episode when anyone but the scenario's ball carrier (`ball.lastTouchPlayerId`) touches the ball: a tackle, an
+   * interception, a keeper catch or parry. Goals and the ball leaving play already end a drill via `endOnDeadBall`.
+   */
+  endOnBallLoss?: boolean;
 }
 
 export interface StepInfo {

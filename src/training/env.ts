@@ -59,6 +59,9 @@ export class SoccerTrainingEnv {
   private readonly ticksPerStep: number;
   private readonly maxSteps: number;
   private readonly endOnDeadBall: boolean;
+  private readonly endOnBallLoss: boolean;
+  /** The player whose possession `endOnBallLoss` protects: the scenario's ball carrier. */
+  private carrierId: PlayerId | undefined;
   private readonly learnerPlayers: ReadonlySet<PlayerId>;
   private readonly weights: RewardWeights;
   private readonly registry: TeamAIRegistry;
@@ -92,6 +95,7 @@ export class SoccerTrainingEnv {
     }
     if (!Number.isSafeInteger(this.maxSteps) || this.maxSteps < 1) throw new RangeError("maxSteps must be a positive integer");
     this.endOnDeadBall = options.endOnDeadBall ?? false;
+    this.endOnBallLoss = options.endOnBallLoss ?? false;
     this.weights = { ...DEFAULT_REWARD, ...options.reward };
     this.opponent = options.opponent ?? { pluginId: "baseline" };
     if (this.opponent.pluginId === "external") throw new RangeError('The opponent cannot use the reserved "external" plugin');
@@ -117,6 +121,7 @@ export class SoccerTrainingEnv {
       },
     }, scenario);
     if (failures.length > 0) throw new Error(`Controller failure: ${failures.map(({ message }) => message).join(" | ")}`);
+    this.carrierId = scenario?.ball.lastTouchPlayerId;
     this.steps = 0;
     this.done = false;
     this.lastPassTick = -Infinity;
@@ -174,6 +179,7 @@ export class SoccerTrainingEnv {
       for (const event of result.events) {
         if (this.scoreEvent(event, terms)) interrupted = true;
         if (this.endOnDeadBall && (event.kind === "goal" || event.kind === "ballExit")) finished = true;
+        if (this.endOnBallLoss && this.carrierId !== undefined && this.takenFromCarrier(event)) finished = true;
       }
       for (const { action, status } of result.actionResults) {
         if (action.source === "controller") this.feedback.set(action.playerId, FEEDBACK_STATUSES.indexOf(status) + 1);
@@ -214,6 +220,13 @@ export class SoccerTrainingEnv {
   dispose(): void {
     this.session.dispose();
     this.done = true;
+  }
+
+  /** Someone other than the carrier touched or won the ball. A missed tackle does not count. */
+  private takenFromCarrier(event: MatchEvent): boolean {
+    if (event.kind === "ballTouch") return event.playerId !== this.carrierId;
+    if (event.kind === "actionContact") return event.action.playerId !== this.carrierId && event.outcome !== "missed";
+    return false;
   }
 
   private validateChoice(value: number, count: number, label: string, slot: number): void {
