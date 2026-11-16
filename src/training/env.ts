@@ -62,6 +62,7 @@ export class SoccerTrainingEnv {
   private readonly endOnBallLoss: boolean;
   private readonly passBonusOnce: boolean;
   private readonly goalNeedsPass: boolean;
+  private readonly endOnSave: boolean;
   /** A learner pass has been completed in this episode. */
   private passRewarded = false;
   private readonly learnerPlayers: ReadonlySet<PlayerId>;
@@ -100,6 +101,7 @@ export class SoccerTrainingEnv {
     this.endOnBallLoss = options.endOnBallLoss ?? false;
     this.passBonusOnce = options.passBonusOnce ?? false;
     this.goalNeedsPass = options.goalNeedsPass ?? false;
+    this.endOnSave = options.endOnSave ?? false;
     this.weights = { ...DEFAULT_REWARD, ...options.reward };
     this.opponent = options.opponent ?? { pluginId: "baseline" };
     if (this.opponent.pluginId === "external") throw new RangeError('The opponent cannot use the reserved "external" plugin');
@@ -184,6 +186,8 @@ export class SoccerTrainingEnv {
         if (this.scoreEvent(event, terms)) interrupted = true;
         if (this.endOnDeadBall && (event.kind === "goal" || event.kind === "ballExit")) finished = true;
         if (this.endOnBallLoss && this.rivalTouched(event)) finished = true;
+        if (this.endOnSave && event.kind === "actionContact" && this.learnerPlayers.has(event.action.playerId) &&
+            (event.outcome === "caught" || event.outcome === "parried")) finished = true;
       }
       for (const { action, status } of result.actionResults) {
         if (action.source === "controller") this.feedback.set(action.playerId, FEEDBACK_STATUSES.indexOf(status) + 1);

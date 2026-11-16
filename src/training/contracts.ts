@@ -103,6 +103,8 @@ export interface TrainingEnvOptions {
   passBonusOnce?: boolean;
   /** A goal pays only after a learner pass has been completed in the episode. */
   goalNeedsPass?: boolean;
+  /** End the episode when a learner keeper catches or parries the ball. */
+  endOnSave?: boolean;
 }
 
 export interface StepInfo {

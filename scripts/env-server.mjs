@@ -32,7 +32,9 @@ const PURE_REWARD = {
   passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0,
 };
 /** Per pure drill: shoot pays the goal, pass pays the first completed pass, attack pays both (the goal only after the pass). */
-const PURE_REWARDS = { shoot: { goalScored: 1 }, pass: { passCompleted: 1 }, attack: { passCompleted: 0.5, goalScored: 0.5 } };
+const PURE_REWARDS = { shoot: { goalScored: 1 }, pass: { passCompleted: 1 }, attack: { passCompleted: 0.5, goalScored: 0.5 },
+  // The keeper drill trains the learner's keeper: a catch or parry pays, a goal against costs.
+  keeper: { goalScored: 0, save: 1, goalConceded: -1 } };
 const INIT = 1, RESET = 2, STEP = 3, CLOSE = 4, SET_POOL = 5;
 let slots = [];
 let layout;
@@ -65,7 +67,7 @@ function makeEnv(options, learnerTeamId, spec) {
   }
   return new SoccerTrainingEnv({
     config, learnerTeamId, opponent, registry,
-    ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward, passBonusOnce: options.passBonusOnce, goalNeedsPass: options.goalNeedsPass,
+    ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward, passBonusOnce: options.passBonusOnce, goalNeedsPass: options.goalNeedsPass, endOnSave: options.endOnSave,
     maxPlayersPerTeam: options.maxPlayersPerTeam, roleFeatures: options.roleFeatures, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall, endOnBallLoss: options.endOnBallLoss,
   });
 }
@@ -139,7 +141,9 @@ function begin(slot, seed) {
     if (pure) {
       envOptions = { ...envOptions };
       envOptions.reward = { ...PURE_REWARD, ...(slots.options.pureRewards?.[drill] ?? PURE_REWARDS[drill] ?? { goalScored: 1 }) };
-      envOptions.endOnBallLoss = true;
+      // The rival shooter is meant to touch the ball in the keeper drill, which ends on the keeper's first save instead.
+      envOptions.endOnBallLoss = drill !== "keeper";
+      envOptions.endOnSave = drill === "keeper";
       envOptions.passBonusOnce = true;
       envOptions.goalNeedsPass = drill === "attack" && slots.options.goalNeedsPass !== false;
     }
@@ -167,7 +171,8 @@ function begin(slot, seed) {
       // The roster slots the trainer learns from in a pure drill: the carrier, and the runner where there is one.
       const roster = slot.current.config.teams[slot.side].players;
       const slotBit = (id) => id === undefined ? 0 : 1 << roster.findIndex((player) => player.id === id);
-      slot.learn = pure ? slotBit(made.carrierId) | (drill === "shoot" ? 0 : slotBit(made.runnerId)) : 0;
+      const keeperBit = 1 << roster.findIndex((player) => player.role === "goalkeeper");
+      slot.learn = !pure ? 0 : drill === "keeper" ? keeperBit : slotBit(made.carrierId) | (drill === "shoot" ? 0 : slotBit(made.runnerId));
       slot.last = slot.current.reset(episodeSeed, scenario);
       break;
     } catch (error) {
