@@ -296,3 +296,11 @@ Gen11: init from gen10, 800 iterations, mix adds cross, lob and keeper drills, 5
 ## Pass-break reward and generation 12 (role_gen12)
 
 New reward `passBreak` (`--break-bonus`): per opponent a completed pass takes out of the game (nearer our goal than the ball at the kick, and nearer than the receiver at the reception; at most two per pass). Gen12: init from gen11, 800 iterations, break bonus 0.1, mix weighted toward three, lob and keeper drills, 832 failure states (233 re-recorded from gen11). Head to head vs gen11, 128 matches each (gen11 listed first): -0.40, -0.73, -0.64 on three seed sets, so gen12 wins each. Promoted. But passes per match did not rise (6.3, gen11 6.8) and the dribble share fell to 0.35 (0.40); the reward made the team stronger, not more passing-heavy by this count. Keeper saves stay at 0.03 per match. Goals per match against tuned fell from 3.70 to 1.87, so the gain looks defensive.
+
+## Generation 13 (role_gen13), not promoted
+
+Rewards added: save (0.3), failed pass (-0.05), out of bounds (-0.05), shot on target (0.1, scaled by closeness), and no ball-progress credit in the last 6 m. Pool: 8 older anchors (gen3, 5, 6, 8, 9, 10, 11, 12) plus 2 snapshots (every 100 iterations). Mix weighted to keeper, pass, three and shoot drills. Init from gen12, 800 iterations, 1060 failure states.
+
+Head to head vs gen12, 128 matches each: gen12 won by 0.54, 0.34 and 0.34 on three seed sets, so gen13 is weaker. Not promoted (model kept in `models/candidates/role_gen13.json`). Keeper saves in matches stayed at 0.00; out-of-bounds exits by us were unchanged (3.2 per match); goals scored against tuned fell (2.54 to 1.63).
+
+Measurement correction: the earlier "passes per match" figure (6 to 9) counted any received ball whose flight came from any kick, including the opponent's clearances and interceptions. Counting only a teammate receiving a teammate's kick, gen12 completes about 0.4 passes per match; the ball reaches an opponent about as often (0.38 received, 0.7 miscontrolled). Passing is rare and mostly fails, which matches what is seen in the browser.
