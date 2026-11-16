@@ -297,6 +297,14 @@ function saveAim(tactics: Tactics, player: PlayerState, ownGoalX: number): Vec2 
   return best?.aim;
 }
 
+/**
+ * The direction in which a save started now would meet the ball, or undefined when no save can reach it. The learner's
+ * save act uses this so the policy only has to decide whether to dive, not how to aim it.
+ */
+export function keeperSaveAim(world: TeamObservation, attack: AttackDirection, player: PlayerState): Vec2 | undefined {
+  return saveAim({ world, attack } as Tactics, player, -attack * world.pitch.lengthM / 2);
+}
+
 function goalkeeper(tactics: Tactics, player: PlayerState): PlayerIntent {
   const { pitch, ball } = tactics.world;
   const { attack } = tactics;

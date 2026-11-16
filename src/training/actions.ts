@@ -4,6 +4,7 @@ import {
   ACT_NONE, ACT_SAVE, ACT_SHOOT_CENTER, ACT_SHOOT_LEFT, ACT_SHOOT_RIGHT, ACT_TACKLE, MOVE_COUNT,
 } from "./contracts.js";
 import type { ActionSpace } from "./contracts.js";
+import { keeperSaveAim } from "../controllers/baseline.js";
 import { clamp, lead, toWorld, unitDirection } from "./geometry.js";
 
 type PlayerState = TeamObservation["players"][number];
@@ -144,7 +145,9 @@ export function writeActionMask(context: AgentContext, space: ActionSpace, mask:
     targets(true);
   }
   if (!ownDribble && toBall <= 3) mask[offset + ACT_TACKLE] = 1;
-  if (ego.definition.role === "goalkeeper" && inKeeperArea(context)) mask[offset + ACT_SAVE] = 1;
+  // A save is legal only when one started now could reach the ball, so a dive is never wasted on bad timing.
+  if (ego.definition.role === "goalkeeper" && inKeeperArea(context) &&
+      keeperSaveAim(observation, context.attack, ego) !== undefined) mask[offset + ACT_SAVE] = 1;
 }
 
 /** Converts a legal choice to an engine intent. Returns undefined requests for "none". */
@@ -171,8 +174,9 @@ export function decodeAction(
     return { ...base, request: { kind: "tackle", direction: unitDirection(ego.position, origin, forward) } };
   }
   if (act === ACT_SAVE) {
+    const aim = keeperSaveAim(observation, attack, ego);
     const target = lead(origin, ball.velocity, 0.2);
-    return { ...base, request: { kind: "keeperSave", direction: unitDirection(ego.position, target, forward) } };
+    return { ...base, request: { kind: "keeperSave", direction: aim ?? unitDirection(ego.position, target, forward) } };
   }
 
   const loft = act >= space.loftBase;
