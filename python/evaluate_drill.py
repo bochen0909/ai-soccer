@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from soccer_env import SoccerVecEnv
-from train_ppo import Policy, act as sample_actions
+from train_ppo import act as sample_actions, load_policy
 
 
 def scoring_rate(policy, drill, episodes, seed, end_on_ball_loss, greedy):
@@ -41,8 +41,7 @@ def main():
     args = parser.parse_args()
     checkpoint = torch.load(os.path.abspath(args.checkpoint))
     state = checkpoint["policy"]
-    policy = Policy(state["body.0.weight"].shape[1], state["act.weight"].shape[0], hidden=state["body.0.weight"].shape[0])
-    policy.load_state_dict(state)
+    policy = load_policy(state)
     for label, loss in (("whole drill", False), ("ends on ball loss", True)):
         goals = scoring_rate(policy, args.drill, args.episodes, args.seed, loss, args.greedy)
         half = 1.96 * np.sqrt(goals.mean() * (1 - goals.mean()) / len(goals))

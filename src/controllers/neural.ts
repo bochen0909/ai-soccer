@@ -15,6 +15,8 @@ export interface PolicyWeights {
   actCount: number;
   moveCount: number;
   tensors: Readonly<Record<string, { shape: readonly number[]; data: string }>>;
+  /** A separate network for the goalkeeper (same sizes). Without it the goalkeeper uses the main network. */
+  keeper?: { tensors: Readonly<Record<string, { shape: readonly number[]; data: string }>> };
 }
 
 export interface Network {
@@ -25,6 +27,8 @@ export interface Network {
   w1: Float32Array; b1: Float32Array; w2: Float32Array; b2: Float32Array;
   moveW: Float32Array; moveB: Float32Array; sprintW: Float32Array; sprintB: Float32Array;
   actW: Float32Array; actB: Float32Array;
+  /** The goalkeeper's own network, when the file has one. */
+  keeper?: Network;
 }
 
 function floats(weights: PolicyWeights, name: string, length: number): Float32Array {
@@ -43,7 +47,9 @@ function floats(weights: PolicyWeights, name: string, length: number): Float32Ar
 export function decodeWeights(weights: PolicyWeights): Network {
   if (weights.version !== 1) throw new RangeError("Unsupported policy version");
   const { obsSize, hidden, actCount, moveCount } = weights;
+  const keeper = weights.keeper ? decodeWeights({ ...weights, tensors: weights.keeper.tensors, keeper: undefined }) : undefined;
   return {
+    keeper,
     obsSize, hidden, actCount, moveCount,
     w1: floats(weights, "w1", hidden * obsSize), b1: floats(weights, "b1", hidden),
     w2: floats(weights, "w2", hidden * hidden), b2: floats(weights, "b2", hidden),
@@ -178,7 +184,9 @@ export class NeuralTeamAI implements TeamAI {
       writeObservation(agent, this.layout, status === undefined ? 0 : FEEDBACK_STATUSES.indexOf(status) + 1,
         this.teamIndex, row, 0);
       writeActionMask(agent, this.space, mask, 0);
-      const output = forward(this.network, row);
+      // The goalkeeper plays with its own network when the policy has one.
+      const network = agent.ego.definition.role === "goalkeeper" && this.network.keeper ? this.network.keeper : this.network;
+      const output = forward(network, row);
       const move = choose(output.move, undefined, this.greedy, this.random);
       const sprint = choose(output.sprint, undefined, this.greedy, this.random);
       const act = choose(output.act, (index) => mask[index] === 1, this.greedy, this.random);

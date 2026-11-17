@@ -12,13 +12,12 @@ import numpy as np
 import torch
 
 from soccer_env import SoccerVecEnv
-from train_ppo import Policy, act as sample_actions
+from train_ppo import act as sample_actions, load_policy
 
 
 def breakdown(path, episodes, seed):
     state = torch.load(os.path.abspath(path))["policy"]
-    policy = Policy(state["body.0.weight"].shape[1], state["act.weight"].shape[0], hidden=state["body.0.weight"].shape[0])
-    policy.load_state_dict(state)
+    policy = load_policy(state)
     env = SoccerVecEnv(4, 4, seed=seed, drill="keeper", maxSteps=60, pureDrills=["keeper"])
     each = -(-episodes // env.num_envs)
     batch = env.reset(seed=seed)

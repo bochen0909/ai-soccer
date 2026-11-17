@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   createArcadeConfig, createDefaultAIRegistry, createElevenAsideConfig, decodeWeights, evaluateMatch, forward,
-  MatchSession, registerNeuralPolicy, TeamAIRegistry,
+  MatchSession, NeuralTeamAI, registerNeuralPolicy, SoccerTrainingEnv, TeamAIRegistry,
 } from '../dist/index.js';
 
 const weights = JSON.parse(readFileSync(new URL('../models/trained-5v5.json', import.meta.url), 'utf8'));
@@ -70,4 +70,34 @@ test('a policy trained for five players refuses a larger roster', () => {
   assert.equal(failures.length, 1);
   assert.match(failures[0].message, /trained for 5 players/);
   assert.ok(TeamAIRegistry);
+});
+
+test('a separate goalkeeper network drives only the goalkeeper, and files without one still play with one network', () => {
+  const env = new SoccerTrainingEnv();
+  env.reset(1);
+  const observation = env.observation();
+  const home = env.config.teams[0].players;
+  const intentsFor = (policy) => {
+    const ai = new NeuralTeamAI(decodeWeights(policy));
+    ai.reset({
+      teamId: 'home', teamIndex: 0, players: home, opponents: env.config.teams[1].players, config: { greedy: true },
+      seed: 1, contractVersion: 1,
+    });
+    return ai.decide(observation, { playerIds: home.map(({ id }) => id), revision: 0 }, { actionResults: [], passIntention: null });
+  };
+  // A keeper network that always picks move 3: a quarter turn from the attack direction, which is +y for the home side.
+  const moveBias = new Float32Array(weights.moveCount);
+  moveBias[3] = 1000;
+  const keeperTensors = { ...weights.tensors, moveB: { shape: [weights.moveCount], data: Buffer.from(moveBias.buffer).toString('base64') } };
+  const plain = intentsFor(weights);
+  const split = intentsFor({ ...weights, keeper: { tensors: keeperTensors } });
+  const keeperId = home.find(({ role }) => role === 'goalkeeper').id;
+  for (const [index, intent] of split.entries()) {
+    if (intent.playerId === keeperId) {
+      assert.ok(Math.abs(intent.movement.x) < 1e-6 && intent.movement.y > 0.99, JSON.stringify(intent.movement));
+      assert.notDeepEqual(intent.movement, plain[index].movement);
+    } else {
+      assert.deepEqual(intent, plain[index]);
+    }
+  }
 });

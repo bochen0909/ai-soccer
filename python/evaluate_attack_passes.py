@@ -12,7 +12,7 @@ import numpy as np
 import torch
 
 from soccer_env import SoccerVecEnv
-from train_ppo import Policy, act as sample_actions
+from train_ppo import act as sample_actions, load_policy
 
 
 # Pure rewards: pass drill pays 1 for the first completed pass; attack pays 0.5 for it and 0.5 for a goal after it.
@@ -21,8 +21,7 @@ THRESHOLD = {"pass": 0.5, "attack": 0.25}
 
 def breakdown(path, episodes, seed, drill):
     state = torch.load(os.path.abspath(path))["policy"]
-    policy = Policy(state["body.0.weight"].shape[1], state["act.weight"].shape[0], hidden=state["body.0.weight"].shape[0])
-    policy.load_state_dict(state)
+    policy = load_policy(state)
     env = SoccerVecEnv(4, 4, seed=seed, drill=drill, maxSteps=60, pureDrills=[drill])
     each = -(-episodes // env.num_envs)
     batch = env.reset(seed=seed)

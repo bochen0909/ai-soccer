@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from soccer_env import SoccerVecEnv
-from train_ppo import Policy, act as sample_actions
+from train_ppo import act as sample_actions, load_policy
 
 
 def play(policy, opponent, matches, seed, deterministic):
@@ -44,8 +44,7 @@ def main():
     checkpoint = torch.load(path)
     obs_size = checkpoint["policy"]["body.0.weight"].shape[1]
     act_count = checkpoint["policy"]["act.weight"].shape[0]
-    policy = Policy(obs_size, act_count, hidden=checkpoint["policy"]["body.0.weight"].shape[0])
-    policy.load_state_dict(checkpoint["policy"])
+    policy = load_policy(checkpoint["policy"])
     print(f"{args.checkpoint}, iteration {checkpoint.get('iteration')}, {'greedy' if args.greedy else 'sampled'} actions, held-out seeds")
     for opponent in ("default", "tuned", *(f"model:{os.path.abspath(a)}" for a in args.anchor)):
         diffs = play(policy, opponent, args.matches, args.seed, args.greedy)

@@ -38,18 +38,57 @@ class Policy(nn.Module):
         for head, gain in ((self.move, 0.01), (self.sprint, 0.01), (self.act, 0.01), (self.value, 1.0)):
             nn.init.orthogonal_(head.weight, gain)
 
-    def forward(self, obs, mask):
+    def forward(self, obs, mask, keeper=None):
         h = self.body(obs)
         act_logits = self.act(h).masked_fill(~mask, NEG)
         return Categorical(logits=self.move(h)), Categorical(logits=self.sprint(h)), Categorical(logits=act_logits), self.value(h).squeeze(-1)
 
-    def evaluate(self, obs, mask, actions=None, deterministic=False):
-        move, sprint, act, value = self(obs, mask)
+    def evaluate(self, obs, mask, actions=None, deterministic=False, keeper=None):
+        move, sprint, act, value = self(obs, mask, keeper)
         if actions is None:
             actions = torch.stack([d.probs.argmax(-1) if deterministic else d.sample() for d in (move, sprint, act)], -1)
         logp = move.log_prob(actions[..., 0]) + sprint.log_prob(actions[..., 1]) + act.log_prob(actions[..., 2])
         entropy = move.entropy() + sprint.entropy() + act.entropy()
         return actions, logp, entropy, value
+
+
+class TeamPolicy(Policy):
+    """A plain Policy for the outfield players (its weights keep their usual names) and a separate network `keeper_net` for the keeper.
+
+    `keeper` is a bool tensor, one entry per sample, true for the goalkeeper's samples. Both networks see every sample, and the
+    choice is made per sample, so gradients reach only the network whose output was used.
+    """
+    def __init__(self, obs_size, act_count, move_count=9, hidden=256):
+        super().__init__(obs_size, act_count, move_count, hidden)
+        self.keeper_net = Policy(obs_size, act_count, move_count, hidden)
+
+    def forward(self, obs, mask, keeper=None):
+        outfield = Policy.forward(self, obs, mask)
+        if keeper is None:
+            return outfield
+        goalkeeper = self.keeper_net(obs, mask)
+        pick = keeper.unsqueeze(-1)
+        heads = [Categorical(logits=torch.where(pick, g.logits, o.logits)) for o, g in zip(outfield[:3], goalkeeper[:3])]
+        return (*heads, torch.where(keeper, goalkeeper[3], outfield[3]))
+
+
+def is_team_state(state):
+    return any(key.startswith("keeper_net.") for key in state)
+
+
+def load_policy(state, team=None):
+    """Builds a policy for a state dict. A plain (one network) state gives a Policy, or with team=True a TeamPolicy whose keeper
+    starts as a copy of that network. A two network state always gives a TeamPolicy."""
+    team = is_team_state(state) or bool(team)
+    obs_size, hidden = state["body.0.weight"].shape[1], state["body.0.weight"].shape[0]
+    act_count, move_count = state["act.weight"].shape[0], state["move.weight"].shape[0]
+    policy = (TeamPolicy if team else Policy)(obs_size, act_count, move_count, hidden)
+    if team and not is_team_state(state):
+        policy.load_state_dict(state, strict=False)
+        policy.keeper_net.load_state_dict(state)
+    else:
+        policy.load_state_dict(state)
+    return policy
 
 
 def to_tensors(batch, device):
@@ -61,9 +100,11 @@ def to_tensors(batch, device):
 
 def act(policy, batch, device, deterministic=False):
     obs, mask = to_tensors(batch, device)
-    with torch.no_grad():
-        actions, logp, _, value = policy.evaluate(obs, mask, deterministic=deterministic)
     e, a = batch.obs.shape[:2]
+    # The keeper is roster slot 0.
+    keeper = (torch.arange(e * a) % a == 0).to(device) if isinstance(policy, TeamPolicy) else None
+    with torch.no_grad():
+        actions, logp, _, value = policy.evaluate(obs, mask, deterministic=deterministic, keeper=keeper)
     return actions.reshape(e, a, 3), logp.reshape(e, a), value.reshape(e, a)
 
 
@@ -124,6 +165,9 @@ def main():
     parser.add_argument("--pure-rewards", default=None,
                         help='JSON overriding the per-drill rewards of pure drills, e.g. \'{"attack": {"passCompleted": 0.5, "goalScored": 0.5}}\'. '
                              'Defaults: shoot goal 1, pass first completed pass 1, attack pass 0.5 and goal 0.5 (the goal only after the pass)')
+    parser.add_argument("--keeper-net", action="store_true",
+                        help="give the goalkeeper its own network (a copy of the --init policy at the start). A checkpoint that already "
+                             "has one keeps it")
     parser.add_argument("--value-warmup", type=int, default=0,
                         help="iterations that train only the value head, so a pretrained policy is not wrecked by a random critic")
     parser.add_argument("--league-anchor", nargs="+", default=None,
@@ -234,10 +278,14 @@ def main():
             evaluation_env.close()
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count
     T = args.rollout
-    hidden = torch.load(args.init)["policy"]["body.0.weight"].shape[0] if args.init else args.hidden
-    policy = Policy(D, C, hidden=hidden).to(device)
-    if args.init:
-        policy.load_state_dict(torch.load(args.init)["policy"])
+    init_state = torch.load(args.init)["policy"] if args.init else None
+    if init_state is not None:
+        policy = load_policy(init_state, team=args.keeper_net)
+    else:
+        policy = (TeamPolicy if args.keeper_net else Policy)(D, C, hidden=args.hidden)
+    team = isinstance(policy, TeamPolicy)
+    if team:
+        print("the goalkeeper has its own network")
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr, eps=1e-5)
     log = open(os.path.join(run_dir, "log.jsonl"), "a")
     print(f"{E} envs x {A} agents, obs {D}, acts {C}, {T} steps per rollout -> {E * T * A} samples per iteration")
@@ -300,7 +348,14 @@ def main():
             b_logp = torch.as_tensor(np.stack(store["logp"]).reshape(-1)[agent])
             b_adv = torch.as_tensor(adv.reshape(-1)[agent])
             b_ret = torch.as_tensor(returns.reshape(-1)[agent])
-            b_adv = (b_adv - b_adv.mean()) / (b_adv.std() + 1e-8)
+            b_keeper = torch.as_tensor(np.broadcast_to(np.arange(A) == 0, (T, E, A)).reshape(-1)[agent])
+            if team:
+                # The two networks learn from different samples, so each group's advantages are normalised on their own.
+                for group in (b_keeper, ~b_keeper):
+                    if group.sum() > 1:
+                        b_adv[group] = (b_adv[group] - b_adv[group].mean()) / (b_adv[group].std() + 1e-8)
+            else:
+                b_adv = (b_adv - b_adv.mean()) / (b_adv.std() + 1e-8)
 
             n = b_obs.shape[0]
             size = n // args.minibatches
@@ -311,7 +366,7 @@ def main():
                 stop = False
                 for start in range(0, n - size + 1, size):
                     idx = order[start:start + size]
-                    _, logp, entropy, value = policy.evaluate(b_obs[idx], b_mask[idx], b_act[idx])
+                    _, logp, entropy, value = policy.evaluate(b_obs[idx], b_mask[idx], b_act[idx], keeper=b_keeper[idx] if team else None)
                     ratio = (logp - b_logp[idx]).exp()
                     unclipped = ratio * b_adv[idx]
                     clipped = ratio.clamp(1 - args.clip, 1 + args.clip) * b_adv[idx]

@@ -10,15 +10,25 @@ TENSORS = {  # name in the file -> name in the PyTorch state dict
 }
 
 
-def write_policy_json(state, path, source="", iteration=None):
-    """state is a PyTorch state dict of train_ppo.Policy. Returns the file size in bytes."""
+def _tensors(state, prefix=""):
     tensors = {}
     for name, key in TENSORS.items():
-        array = state[key].detach().cpu().numpy().astype("<f4")
+        array = state[prefix + key].detach().cpu().numpy().astype("<f4")
         tensors[name] = {"shape": list(array.shape), "data": base64.b64encode(array.tobytes()).decode("ascii")}
+    return tensors
+
+
+def write_policy_json(state, path, source="", iteration=None):
+    """state is a PyTorch state dict of train_ppo.Policy or TeamPolicy. Returns the file size in bytes.
+
+    A TeamPolicy also writes a "keeper" block with the goalkeeper network's tensors; files without it use one network for everyone.
+    """
+    tensors = _tensors(state)
     document = {"version": 1, "obsSize": state["body.0.weight"].shape[1], "hidden": state["body.0.weight"].shape[0],
                 "actCount": state["act.weight"].shape[0], "moveCount": state["move.weight"].shape[0],
                 "source": source, "iteration": iteration, "tensors": tensors}
+    if "keeper_net.body.0.weight" in state:
+        document["keeper"] = {"tensors": _tensors(state, "keeper_net.")}
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w") as handle:
         json.dump(document, handle, separators=(",", ":"))

@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from policy_io import write_policy_json
-from train_ppo import Policy
+from train_ppo import load_policy
 
 def main():
     parser = argparse.ArgumentParser()
@@ -27,13 +27,13 @@ def main():
     obs_size = state["body.0.weight"].shape[1]
     act_count = state["act.weight"].shape[0]
     size = write_policy_json(state, args.out, os.path.basename(os.path.dirname(args.checkpoint)), checkpoint.get("iteration"))
-    print(f"wrote {args.out}: {obs_size} inputs, {state['body.0.weight'].shape[0]} hidden units, {act_count} acts, {size / 1024:.0f} KB")
+    print(f"wrote {args.out}: {obs_size} inputs, {state['body.0.weight'].shape[0]} hidden units, {act_count} acts, "
+          f"{'with a goalkeeper network, ' if 'keeper_net.body.0.weight' in state else ''}{size / 1024:.0f} KB")
 
     if args.check:
         # Real observations from a short match, so the game's network can be tested against PyTorch exactly.
         from soccer_env import SoccerVecEnv
-        policy = Policy(obs_size, act_count, hidden=state["body.0.weight"].shape[0])
-        policy.load_state_dict(state)
+        policy = load_policy(state)
         env = SoccerVecEnv(1, 1, seed=11)
         batch = env.reset()
         rows = []
