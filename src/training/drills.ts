@@ -48,7 +48,7 @@ export function createDrill(kind: DrillKind, config: MatchConfig, learnerIndex: 
 /** Like `createDrill`, and also says who the ball carrier and the runner (the carrier's teammate in the play) are. */
 export function createDrillWithRoles(
   kind: DrillKind, config: MatchConfig, learnerIndex: 0 | 1, seed: number,
-): { scenario: ScenarioDefinition; carrierId: string; runnerId: string | undefined } {
+): { scenario: ScenarioDefinition; carrierId: string; runnerId: string | undefined; involvedIds: string[] } {
   const next = random(seed);
   const between = (low: number, high: number) => low + (high - low) * next();
   const attack = learnerIndex === 0 ? 1 : -1;
@@ -254,7 +254,13 @@ export function createDrillWithRoles(
       control: { kind: "free" },
     },
   };
-  return { scenario, carrierId: carrier.id, runnerId: mates[0]?.id };
+  // The players a pure version of the drill trains: the ones the drill is about.
+  const involved = kind === "keeper" ? [keeper(learner)]
+    : kind === "shoot" ? [carrier]
+    : kind === "pass" || kind === "attack" ? [carrier, ...mates.slice(0, 1)]
+    : kind === "rondo" ? [carrier, ...mates.slice(0, 3)]
+    : [carrier, ...mates];
+  return { scenario, carrierId: carrier.id, runnerId: mates[0]?.id, involvedIds: involved.map(({ id }) => id) };
 }
 
 const swapTeam = (id: string): string => id.startsWith("home") ? `away${id.slice(4)}` : id.startsWith("away") ? `home${id.slice(4)}` : id;

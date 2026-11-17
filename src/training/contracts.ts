@@ -105,6 +105,8 @@ export interface TrainingEnvOptions {
   goalNeedsPass?: boolean;
   /** End the episode when a learner keeper catches or parries the ball. */
   endOnSave?: boolean;
+  /** The possession reward also counts a free ball for the team that touched it last, so a pass in flight keeps paying. */
+  possessionByLastTouch?: boolean;
 }
 
 export interface StepInfo {

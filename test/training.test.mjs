@@ -340,3 +340,33 @@ test('a shot on target near goal is paid, a back pass picked off by the keeper i
   assert.ok(paid > 0, 'a centered shot from 8 to 16 m should usually be on target');
   assert.ok(Object.values(play('shoot', 1, ACT_NONE, {})).every(Number.isFinite));
 });
+
+test('possessionByLastTouch keeps paying for a pass in flight, and is off by default', () => {
+  const flightRewards = (possessionByLastTouch) => {
+    const env = new SoccerTrainingEnv({
+      endOnDeadBall: true, endOnBallLoss: true, maxSteps: 40, possessionByLastTouch,
+      reward: { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0.01, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0, save: 0 },
+    });
+    const { scenario, carrierId, runnerId } = createDrillWithRoles('rondo', env.config, 0, 1);
+    let result = env.reset(1, scenario);
+    const roster = env.config.teams[0].players.map(({ id }) => id);
+    const [me, mate] = [roster.indexOf(carrierId), roster.indexOf(runnerId)];
+    let kicked = false;
+    const flight = [];
+    for (let step = 0; step < 40 && !result.terminated && !result.truncated; step += 1) {
+      const actions = new Array(env.agentCount * ACTION_FIELDS).fill(0);
+      if (!kicked && result.actionMask[me * env.actionSpace.actCount + 6 + mate] === 1) {
+        actions[me * ACTION_FIELDS + 2] = 6 + mate;
+        kicked = true;
+      }
+      result = env.step(actions);
+      if (kicked && env.observation().ball.control.kind === 'free') flight.push(result.reward);
+    }
+    return flight;
+  };
+  const without = flightRewards(false);
+  const withIt = flightRewards(true);
+  assert.ok(without.length > 0 && withIt.length > 0);
+  assert.ok(without.every((reward) => reward === 0));
+  assert.ok(withIt.every((reward) => Math.abs(reward - 0.01) < 1e-9));
+});

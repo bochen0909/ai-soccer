@@ -63,6 +63,9 @@ export class SoccerTrainingEnv {
   private readonly passBonusOnce: boolean;
   private readonly goalNeedsPass: boolean;
   private readonly endOnSave: boolean;
+  private readonly possessionByLastTouch: boolean;
+  /** Team of the last player to touch the ball (true: ours), from the scenario's carrier at the start, or null after a goal. */
+  private holder: boolean | null = null;
   /** A learner pass has been completed in this episode. */
   private passRewarded = false;
   private readonly learnerPlayers: ReadonlySet<PlayerId>;
@@ -102,6 +105,7 @@ export class SoccerTrainingEnv {
     this.passBonusOnce = options.passBonusOnce ?? false;
     this.goalNeedsPass = options.goalNeedsPass ?? false;
     this.endOnSave = options.endOnSave ?? false;
+    this.possessionByLastTouch = options.possessionByLastTouch ?? false;
     this.weights = { ...DEFAULT_REWARD, ...options.reward };
     this.opponent = options.opponent ?? { pluginId: "baseline" };
     if (this.opponent.pluginId === "external") throw new RangeError('The opponent cannot use the reserved "external" plugin');
@@ -128,6 +132,7 @@ export class SoccerTrainingEnv {
     }, scenario);
     if (failures.length > 0) throw new Error(`Controller failure: ${failures.map(({ message }) => message).join(" | ")}`);
     this.passRewarded = false;
+    this.holder = scenario ? this.learnerPlayers.has(scenario.ball.lastTouchPlayerId) : null;
     this.steps = 0;
     this.done = false;
     this.lastPassTick = -Infinity;
@@ -206,6 +211,9 @@ export class SoccerTrainingEnv {
     if (control.kind !== "free") {
       const owner = after.players.find((player) => player.playerId === control.playerId);
       terms.possession = (owner?.teamId === this.learnerTeamId ? 1 : -1) * this.weights.possession * this.shapingScale;
+    } else if (this.possessionByLastTouch && this.holder !== null) {
+      // A ball in flight still belongs to the team that last touched it, so a pass costs no possession.
+      terms.possession = (this.holder ? 1 : -1) * this.weights.possession * this.shapingScale;
     }
 
     this.steps += 1;
@@ -247,6 +255,7 @@ export class SoccerTrainingEnv {
   private scoreEvent(event: MatchEvent, terms: { goalScored: number; goalConceded: number; passCompleted: number; assist: number; turnover: number; passBreak: number; save: number; passFailed: number; outOfBounds: number; shotOnTarget: number }): boolean {
     if (event.kind === "goal") {
       this.lastTouchLearner = null;
+      this.holder = null;
       this.passInFlight = false;
       if (event.teamId === this.learnerTeamId) {
         if (!this.goalNeedsPass || this.passRewarded) terms.goalScored += this.weights.goalScored;
@@ -277,6 +286,7 @@ export class SoccerTrainingEnv {
         terms.turnover += (learner ? 1 : -1) * this.weights.turnover * this.shapingScale;
       }
       this.lastTouchLearner = learner;
+      this.holder = learner;
     }
     if (event.kind === "actionContact" && event.outcome === "kicked") {
       this.kickedPast = new Set();

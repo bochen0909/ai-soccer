@@ -157,7 +157,7 @@ def main():
     parser.add_argument("--striker-only", action="store_true",
                         help="drills: update the policy only from the last player on the team (the drill's ball carrier); "
                              "the other players still act with the same policy but their samples are ignored")
-    parser.add_argument("--pure-drills", nargs="+", default=None, choices=["shoot", "attack", "pass", "keeper"],
+    parser.add_argument("--pure-drills", nargs="+", default=None, choices=["shoot", "attack", "pass", "keeper", "rondo"],
                         help="episodes of these drill kinds (alone with --drill, or with --drill-mix) are pure: the only rewards are the goal "
                              "and, for attack and pass, a pass bonus paid once; they end when a rival touches the ball; the policy learns only from the "
                              "carrier (shoot) or the carrier and the runner (attack, pass). Other episodes are unchanged")
@@ -182,6 +182,9 @@ def main():
                         help="league: multiplies how often the tuned (Hard) CPU is drawn, on top of the win-rate weighting")
     parser.add_argument("--snapshot-every", type=int, default=25, help="league: iterations between snapshots of the policy (0: no snapshots, the pool is only the CPUs and the anchors)")
     parser.add_argument("--snapshots-kept", type=int, default=6, help="league: how many recent snapshots stay in the pool")
+    parser.add_argument("--pfsp-floor", type=float, default=0.05,
+                        help="league: smallest draw weight an opponent can have; lower it so beaten opponents are drawn rarely, not 5%% as often as an even one")
+    parser.add_argument("--possession", type=float, default=None, help="possession reward per step in matches and drills (default 0.002)")
     parser.add_argument("--pfsp-power", type=float, default=2.0,
                         help="league: opponents the policy beats less often are drawn more often, by (1.1 - win rate)^power")
     parser.add_argument("--init", default=None, help="checkpoint to start from, for example a drill-trained policy")
@@ -238,6 +241,8 @@ def main():
                              "shotOnTarget": args.shot_bonus}
     if args.progress is not None:
         options["reward"] = {**options.get("reward", {}), "ballProgress": args.progress}
+    if args.possession is not None:
+        options["reward"] = {**options.get("reward", {}), "possession": args.possession}
     run_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "runs", args.name)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -247,7 +252,7 @@ def main():
     next_snapshot_id = 10
 
     def pool_message():
-        weights = {key: max(0.05, (1.1 - entry["rate"]) ** args.pfsp_power) * (args.tuned_boost if key == 1 else 1.0)
+        weights = {key: max(args.pfsp_floor, (1.1 - entry["rate"]) ** args.pfsp_power) * (args.tuned_boost if key == 1 else 1.0)
                    for key, entry in league.items()}
         return [{"id": key, "spec": entry["spec"], "weight": weights[key]} for key, entry in league.items()]
 
