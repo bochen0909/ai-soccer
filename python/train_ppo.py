@@ -136,7 +136,7 @@ def main():
                              "the CPUs are still used for evaluation")
     parser.add_argument("--tuned-boost", type=float, default=1.0,
                         help="league: multiplies how often the tuned (Hard) CPU is drawn, on top of the win-rate weighting")
-    parser.add_argument("--snapshot-every", type=int, default=25, help="league: iterations between snapshots of the policy")
+    parser.add_argument("--snapshot-every", type=int, default=25, help="league: iterations between snapshots of the policy (0: no snapshots, the pool is only the CPUs and the anchors)")
     parser.add_argument("--snapshots-kept", type=int, default=6, help="league: how many recent snapshots stay in the pool")
     parser.add_argument("--pfsp-power", type=float, default=2.0,
                         help="league: opponents the policy beats less often are drawn more often, by (1.1 - win rate)^power")
@@ -211,8 +211,7 @@ def main():
     if args.league_anchor or args.league_params:
         anchors = [("anchor_" + os.path.splitext(os.path.basename(p))[0], "model:" + os.path.abspath(p)) for p in args.league_anchor or []]
         anchors += [("params_" + os.path.splitext(os.path.basename(p))[0], "params:" + os.path.abspath(p)) for p in args.league_params or []]
-        if len(anchors) > 8:
-            raise SystemExit("at most 8 anchors (pool IDs 2 to 9; snapshots start at 10)")
+        next_snapshot_id = max(next_snapshot_id, 2 + len(anchors))   # pool IDs 2.. are anchors, snapshots come after them
         entries = [(0, "default", "default"), (1, "tuned", "tuned")]
         for index, (name, spec) in enumerate(anchors):
             entries.append((2 + index, name, spec))
@@ -225,8 +224,14 @@ def main():
         options["pool"] = pool_message()
     env = SoccerVecEnv(args.processes, args.envs_per_process, seed=args.seed * 100, **options)
     eval_shape = (8, max(1, args.eval_envs // 8))
-    evals = {name: SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None, "drillMix": None, "pureDrills": None, "endOnBallLoss": None, "goalNeedsPass": None})
-             for name, spec in eval_specs.items()}
+    def evaluate_against(spec):
+        # Built per evaluation and closed again, so a long league (many anchors) does not keep a set of idle processes per opponent.
+        evaluation_env = SoccerVecEnv(*eval_shape, seed=5_000_000, **{**options, "opponent": spec, "pool": None, "drillMix": None,
+                                       "pureDrills": None, "endOnBallLoss": None, "goalNeedsPass": None})
+        try:
+            return evaluate_policy(policy, evaluation_env, device, args.eval_episodes)
+        finally:
+            evaluation_env.close()
     E, A, D, C = env.num_envs, env.agents, env.obs_size, env.act_count
     T = args.rollout
     hidden = torch.load(args.init)["policy"]["body.0.weight"].shape[0] if args.init else args.hidden
@@ -338,14 +343,14 @@ def main():
                       "train_goal_diff": float(np.mean(finished_diffs)) if finished_diffs else None, **stats}
             finished_diffs = []
             if iteration % args.eval_every == 0 or iteration == args.iterations:
-                for name, evaluation_env in evals.items():
-                    record[f"eval_{name}"] = evaluate_policy(policy, evaluation_env, device, args.eval_episodes)
+                for name, spec in eval_specs.items():
+                    record[f"eval_{name}"] = evaluate_against(spec)
                 torch.save({"policy": policy.state_dict(), "args": vars(args), "iteration": iteration},
                            os.path.join(run_dir, "latest.pt"))
                 torch.save({"policy": policy.state_dict(), "args": vars(args), "iteration": iteration},
                            os.path.join(run_dir, f"iter_{iteration:04d}.pt"))
             if league:
-                if iteration % args.snapshot_every == 0:
+                if args.snapshot_every > 0 and iteration % args.snapshot_every == 0:
                     path = os.path.join(run_dir, "league", f"snapshot_{iteration:04d}.json")
                     write_policy_json(policy.state_dict(), path, args.name, iteration)
                     # A new snapshot is as strong as the policy itself, so it starts at an even rate.
@@ -359,7 +364,7 @@ def main():
             summary = (f"it {iteration:4d} steps {total_steps:8d} sps {record['sps']:6.0f} "
                        f"train diff {record['train_goal_diff'] if record['train_goal_diff'] is None else round(record['train_goal_diff'], 2)} "
                        f"ent {stats['entropy']:.2f} kl {stats['kl']:.4f}")
-            for name in evals:
+            for name in eval_specs:
                 if f"eval_{name}" in record:
                     e = record[f"eval_{name}"]
                     summary += f" | vs {name}: diff {e['goal_diff']:+.2f} win {e['win_rate']:.2f}"
@@ -368,8 +373,6 @@ def main():
             print(summary, flush=True)
     finally:
         env.close()
-        for evaluation_env in evals.values():
-            evaluation_env.close()
 
 
 if __name__ == "__main__":
