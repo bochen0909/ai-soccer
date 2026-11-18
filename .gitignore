@@ -4,3 +4,4 @@
 /runs/
 /runs-*.log
 /demos/
+__pycache__/
