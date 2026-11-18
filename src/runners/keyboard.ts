@@ -1,4 +1,5 @@
 import type { MatchConfig, Vec2 } from "../contracts/index.js";
+import { rollDistance, rollLaunchSpeed } from "../engine/ball-flight.js";
 import type { ActionIntent, PassTarget } from "../controllers/contracts.js";
 import type { HumanInput, SessionSnapshot } from "../session/contracts.js";
 
@@ -79,7 +80,7 @@ function passTarget(
 }
 
 function groundPower(range: number, config: MatchConfig, speed: number, arrivalSpeed: number): number {
-  return clamp(Math.sqrt(2 * config.ball.groundDecelerationMps2 * range + arrivalSpeed ** 2) / speed, 0, 0.96);
+  return clamp(rollLaunchSpeed(range, arrivalSpeed, config.ball) / speed, 0, 0.96);
 }
 
 function kick(
@@ -88,7 +89,8 @@ function kick(
   const { maxKickSpeedMps } = player.definition.abilities.physical;
   const fullSide = config.teams[0].players.length === 11;
   const maxSpeed = maxKickSpeedMps * (kind === "pass" ? 0.55 : 0.75);
-  const rollout = maxSpeed ** 2 / (2 * Math.max(0.4, config.ball.groundDecelerationMps2));
+  // How far a full-pace pass rolls before it stops.
+  const rollout = rollDistance(maxSpeed, 60, config.ball);
   const maxDistance = kind === "pass" ? Math.min(fullSide ? 38 : 25, rollout * 0.7)
     : Math.min(34, maxSpeed ** 2 / 12);
   const pass = passTarget(snapshot, player, config, aim, maxDistance, kind === "pass");

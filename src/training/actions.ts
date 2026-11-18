@@ -4,7 +4,9 @@ import {
   ACT_NONE, ACT_SAVE, ACT_SHOOT_CENTER, ACT_SHOOT_LEFT, ACT_SHOOT_RIGHT, ACT_TACKLE, MOVE_COUNT,
 } from "./contracts.js";
 import type { ActionSpace } from "./contracts.js";
-import { keeperSaveAim } from "../controllers/baseline.js";
+import type { BallConfig } from "../contracts/index.js";
+import { ballOf, keeperSaveAim, passingPower } from "../controllers/baseline.js";
+import { flightLaunchSpeed } from "../engine/ball-flight.js";
 import { clamp, lead, toWorld, unitDirection } from "./geometry.js";
 
 type PlayerState = TeamObservation["players"][number];
@@ -37,13 +39,8 @@ export function decodeMove(choice: number, attack: AttackDirection): Vec2 {
   return toWorld({ x: Math.cos(angle), y: Math.sin(angle) }, attack);
 }
 
-function passingPower(range: number, speedLimit: number): number {
-  return clamp(Math.sqrt(3.2 * range + 4) / speedLimit, 0.18, 0.88);
-}
-
-function loftPower(range: number, speedLimit: number, gravity: number): number {
-  const speed = Math.sqrt((range * gravity) / Math.sin(2 * LOFT_ELEVATION_RAD));
-  return clamp(speed / speedLimit, 0.25, 1);
+function loftPower(range: number, speedLimit: number, ball: BallConfig): number {
+  return clamp(flightLaunchSpeed(range, LOFT_ELEVATION_RAD, ball) / speedLimit, 0.25, 1);
 }
 
 const CROSS_ELEVATION_DEG = 24;
@@ -56,7 +53,7 @@ const ELEVATION_SPAN_DEG = 35;
  * height; a short loft goes high to clear a defender; anything else keeps the default arc.
  */
 function loftFlight(
-  context: AgentContext, origin: Vec2, target: Vec2, range: number, speedLimit: number, gravity: number,
+  context: AgentContext, origin: Vec2, target: Vec2, range: number, speedLimit: number, ball: BallConfig,
 ): { loft: number; power: number } {
   const { pitch } = context.observation;
   const goalX = context.attack * pitch.lengthM / 2;
@@ -66,16 +63,16 @@ function loftFlight(
     const theta = (CROSS_ELEVATION_DEG * Math.PI) / 180;
     const rise = range * Math.tan(theta) - HEAD_HEIGHT_M;
     if (rise > 1) {
-      const speed = Math.sqrt((gravity * range * range) / (2 * Math.cos(theta) ** 2 * rise));
+      const speed = flightLaunchSpeed(range, theta, ball, HEAD_HEIGHT_M);
       return { loft: (CROSS_ELEVATION_DEG - 15) / ELEVATION_SPAN_DEG, power: clamp(speed / speedLimit, 0.3, 1) };
     }
   }
   if (range < 14) {
     const theta = (LOB_ELEVATION_DEG * Math.PI) / 180;
-    const speed = Math.sqrt((range * gravity) / Math.sin(2 * theta));
+    const speed = flightLaunchSpeed(range, theta, ball);
     return { loft: (LOB_ELEVATION_DEG - 15) / ELEVATION_SPAN_DEG, power: clamp(speed / speedLimit, 0.25, 1) };
   }
-  return { loft: LOFT_PASS, power: loftPower(range, speedLimit, gravity) };
+  return { loft: LOFT_PASS, power: loftPower(range, speedLimit, ball) };
 }
 
 function onPitch(observation: TeamObservation, point: Vec2, margin = 0.7): Vec2 {
@@ -163,7 +160,7 @@ export function decodeAction(
   const forward = { x: attack, y: 0 };
   const origin = { x: ball.position.x, y: ball.position.y };
   const physical = ego.definition.abilities.physical;
-  const gravity = observation.ballConfig?.gravityMps2 ?? 9.81;
+  const ballConfig = ballOf(observation);
 
   if (act >= ACT_SHOOT_LEFT && act <= ACT_SHOOT_RIGHT) {
     const side = act === ACT_SHOOT_LEFT ? 1 : act === ACT_SHOOT_RIGHT ? -1 : 0;
@@ -191,17 +188,17 @@ export function decodeAction(
   }
   if (keeperHeldBy(observation, ego.playerId)) {
     const roll = !loft && range < Math.min(11, physical.maxKeeperRollSpeedMps ** 2 * 0.22);
-    const power = roll ? passingPower(range, physical.maxKeeperRollSpeedMps)
+    const power = roll ? passingPower(range, physical.maxKeeperRollSpeedMps, ballConfig)
       : clamp(range / physical.maxKeeperThrowSpeedMps, 0.32, 0.82);
     return { ...base, request: { kind: "keeperRelease", technique: roll ? "roll" : "throw", direction: aim, power } };
   }
   if (loft) {
-    const flight = loftFlight(context, origin, target, range, physical.maxKickSpeedMps * 0.75, gravity);
+    const flight = loftFlight(context, origin, target, range, physical.maxKickSpeedMps * 0.75, ballConfig);
     return { ...base, request: { kind: "kick", kickType: "loft", direction: aim, ...flight } };
   }
   return { ...base, request: {
     kind: "kick", kickType: "pass", direction: aim, loft: 0,
-    power: passingPower(range, physical.maxKickSpeedMps * 0.55),
+    power: passingPower(range, physical.maxKickSpeedMps * 0.55, ballConfig),
   } };
 }
 

@@ -70,8 +70,13 @@ export interface BallConfig {
   radiusM: number;
   massKg: number;
   gravityMps2: number;
+  /** Rolling resistance of the grass, a constant deceleration of a ball on the ground. */
   groundDecelerationMps2: number;
+  /** Quadratic air drag: deceleration is this times speed squared (0.5 rho Cd A / m, about 0.012 for a size-5 ball). */
+  airDragPerM: number;
   groundRestitution: number;
+  /** Friction coefficient of a bounce: each one takes up to this times the normal impulse off the ball's ground speed. */
+  bounceFriction: number;
   contactRestitution: number;
   maxSpeedMps: number;
 }

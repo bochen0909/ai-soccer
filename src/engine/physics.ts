@@ -87,8 +87,9 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
   }
 
   for (let substep = 0; substep < SUBSTEPS; substep++) {
+    const carrierId = state.ball.control.kind === "dribble" ? state.ball.control.playerId : undefined;
     for (const player of state.players) {
-      applyMovement(player, actions.get(player.playerId), substepSeconds);
+      applyMovement(player, actions.get(player.playerId), substepSeconds, player.playerId === carrierId);
     }
     applyBallForces(state, substepSeconds);
     carryBallInKickWindup(state, slots);
@@ -194,17 +195,25 @@ const eventPriority: Record<PhysicsEvent["kind"], number> = {
   crossing: 4,
 };
 
-function applyMovement(player: PlayerState, action: PlayerAction | undefined, seconds: number): void {
+/** A player with the ball at their feet runs at this share of their top speed. */
+export const DRIBBLE_SPEED_SHARE = 0.9;
+/** Acceleration falls off toward top speed, but never below this share of the standing-start value. */
+const MIN_ACCELERATION_SHARE = 0.2;
+
+function applyMovement(player: PlayerState, action: PlayerAction | undefined, seconds: number, carrying: boolean): void {
   const { maxSpeedMps, accelerationMps2, brakingMps2 } = player.definition.abilities.physical;
   const movement = action?.movement ?? { x: 0, y: 0 };
-  const speedLimit = maxSpeedMps * (0.75 + player.stamina * 0.25);
+  const speedLimit = maxSpeedMps * (0.75 + player.stamina * 0.25) * (carrying ? DRIBBLE_SPEED_SHARE : 1);
   const targetSpeed = speedLimit * (action?.sprint ? 1 : 0.7);
   const target = { x: movement.x * targetSpeed, y: movement.y * targetSpeed };
   const difference = { x: target.x - player.velocity.x, y: target.y - player.velocity.y };
   const distance = Math.hypot(difference.x, difference.y);
   if (distance === 0) return;
+  // A sprinter accelerates hardest from a standstill and less as they near top speed (a = a0 (1 - v / vmax)).
+  const speed = Math.hypot(player.velocity.x, player.velocity.y);
+  const taper = Math.max(MIN_ACCELERATION_SHARE, 1 - speed / speedLimit);
   const rate = difference.x * player.velocity.x + difference.y * player.velocity.y < 0
-    ? brakingMps2 : accelerationMps2;
+    ? brakingMps2 : accelerationMps2 * taper;
   const fraction = Math.min(1, rate * seconds / distance);
   player.velocity.x += difference.x * fraction;
   player.velocity.y += difference.y * fraction;
@@ -232,8 +241,14 @@ function movementBounds(state: EngineState, player: PlayerState): PlayerBounds {
 
 function applyBallForces(state: EngineState, seconds: number): void {
   if (state.ball.control.kind === "keeperHeld") return;
-  const { radiusM, gravityMps2, groundDecelerationMps2, maxSpeedMps } = state.config.ball;
+  const { radiusM, gravityMps2, groundDecelerationMps2, airDragPerM, maxSpeedMps } = state.config.ball;
   const { position, velocity } = state.ball;
+  // Air drag grows with the square of speed, so a hard pass or shot loses pace fast and a soft one hardly at all.
+  // The implicit form stays stable for any step.
+  const drag = 1 / (1 + airDragPerM * Math.hypot(velocity.x, velocity.y, velocity.z) * seconds);
+  velocity.x *= drag;
+  velocity.y *= drag;
+  velocity.z *= drag;
   if (position.z <= radiusM && velocity.z <= 0) {
     if (velocity.z < 0) return;
     const speed = Math.hypot(velocity.x, velocity.y);
@@ -381,9 +396,20 @@ function resolveContact(
       event.player.velocity[event.axis] = 0;
       break;
     case "ground": {
-      state.ball.position.z = state.config.ball.radiusM;
-      const bounce = -state.ball.velocity.z * state.config.ball.groundRestitution;
-      state.ball.velocity.z = bounce >= MINIMUM_BOUNCE_SPEED ? bounce : 0;
+      const { radiusM, groundRestitution, bounceFriction } = state.config.ball;
+      const { velocity } = state.ball;
+      state.ball.position.z = radiusM;
+      // Friction with the grass takes ground speed in proportion to the impact, but a bounce cannot slow the ball
+      // below rolling: a hollow sphere that starts to roll keeps 60% of its sliding speed.
+      const impact = -velocity.z;
+      const ground = Math.hypot(velocity.x, velocity.y);
+      if (ground > 0) {
+        const loss = Math.min(bounceFriction * (1 + groundRestitution) * impact, 0.4 * ground);
+        velocity.x *= (ground - loss) / ground;
+        velocity.y *= (ground - loss) / ground;
+      }
+      const bounce = impact * groundRestitution;
+      velocity.z = bounce >= MINIMUM_BOUNCE_SPEED ? bounce : 0;
       break;
     }
     case "playerContact":

@@ -150,7 +150,7 @@ A goal requires the whole ball to cross the goal plane inside the opening. A goa
 
 For events within the time tolerance, resolve physical contacts first, then scheduled player contacts, then recheck crossing predicates. A valid goal takes precedence over the ordinary exit on the same plane. Stable player order and seeded tie-breaking resolve equivalent possession contests. Suppress separating contacts at zero time and bound event iterations. If the bound is exhausted, fail the run with a diagnostic so an unresolved high-speed trajectory cannot silently skip a boundary. Treat this as a simulation failure during evaluation.
 
-Movement uses acceleration, braking, turning limits, and a speed cap. The ball has ground friction, gravity, bounce, and collision response. Keep these calculations independent of visual animation.
+Movement uses acceleration, braking, turning limits, and a speed cap. Acceleration falls off toward top speed (a = a0 (1 - v / vmax)), and a player with the ball at their feet runs at 90% of their top speed. The ball has rolling resistance, air drag proportional to speed squared, gravity, bounce with friction against the grass, and collision response. The closed forms for rolling and the drag-aware flight solver live in `src/engine/ball-flight.ts`, which every predictor (CPU, learner decoder, keyboard aim assist) uses so they agree with the engine. Keep these calculations independent of visual animation.
 
 ## Player actions and ball control
 

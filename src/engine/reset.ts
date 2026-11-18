@@ -159,7 +159,9 @@ function validateConfig(config: MatchConfig, seed: number): void {
   check(2 * ball.radiusM < Math.min(pitch.goalWidthM, pitch.goalHeightM),
     "configuration", "ball.radiusM", "ball must fit through the goal opening");
   inRange(ball.groundDecelerationMps2, 0, maxSimulationValue, "configuration", "ball.groundDecelerationMps2");
+  inRange(ball.airDragPerM, 0, 1, "configuration", "ball.airDragPerM");
   inRange(ball.groundRestitution, 0, 1, "configuration", "ball.groundRestitution");
+  inRange(ball.bounceFriction, 0, 2, "configuration", "ball.bounceFriction");
   inRange(ball.contactRestitution, 0, 1, "configuration", "ball.contactRestitution");
 
   check(Array.isArray(periodTicks) && periodTicks.length === 2,

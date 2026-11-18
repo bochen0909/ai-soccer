@@ -455,5 +455,5 @@ test('the baseline keeper parries a reachable ground shot and concedes a wider o
   }
 
   assert.deepEqual(playShot(0.55), { parried: true, goals: 0 });
-  assert.deepEqual(playShot(0.8), { parried: false, goals: 1 });
+  assert.deepEqual(playShot(1.2), { parried: false, goals: 1 });
 });

@@ -13,8 +13,8 @@ export function createPlayerAbilities(preset: PlayerAbilityPreset = "adult"): Pl
   const scale = agePresets[preset];
   return {
     physical: {
-      maxSpeedMps: 7.5 * scale.speed,
-      accelerationMps2: 6 * scale.acceleration,
+      maxSpeedMps: 8.5 * scale.speed,
+      accelerationMps2: 12 * scale.acceleration,
       brakingMps2: 9 * scale.acceleration,
       turnRateRadPerSec: 7,
       maxKickSpeedMps: 28 * scale.power,

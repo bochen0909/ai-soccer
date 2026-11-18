@@ -1,4 +1,6 @@
-import type { AttackDirection, PlayerId, TeamObservation, Vec2 } from "../contracts/index.js";
+import type { AttackDirection, BallConfig, PlayerId, TeamObservation, Vec2 } from "../contracts/index.js";
+import { ballPositionAfter, rollLaunchSpeed, rollSpeedAfter } from "../engine/ball-flight.js";
+import { createArcadeConfig } from "../presets/arcade.js";
 import { keeperDiveExtension, keeperSaveTiming, keeperSaveVolumes } from "../engine/keeper-save.js";
 import { capsuleDistanceSquared } from "../engine/physics-geometry.js";
 import type {
@@ -143,9 +145,16 @@ function passingOption(tactics: Tactics, passer: PlayerState, origin: Vec2, maxR
   return best;
 }
 
-function passingPower(range: number, speedLimit: number): number {
-  // Leave enough pace to reach the receiving player's foot-control radius.
-  return clamp(Math.sqrt(3.2 * range + 4) / speedLimit, 0.18, 0.88);
+const ARCADE_BALL = createArcadeConfig().ball;
+
+/** The match's ball, or the arcade ball for hand-built observations without one. */
+export function ballOf(world: TeamObservation): BallConfig {
+  return world.ballConfig ?? ARCADE_BALL;
+}
+
+/** Power for a ground pass that still rolls at 2 m/s, enough to reach the receiver's foot, when it gets there. */
+export function passingPower(range: number, speedLimit: number, ball: BallConfig): number {
+  return clamp(rollLaunchSpeed(range, 2, ball) / speedLimit, 0.18, 0.88);
 }
 
 function restart(tactics: Tactics, player: PlayerState): PlayerIntent {
@@ -166,7 +175,7 @@ function restart(tactics: Tactics, player: PlayerState): PlayerIntent {
   return {
     ...intent,
     request: { kind: "kick", kickType: "pass", direction: aim, loft: 0,
-      power: passingPower(distance(ball.position, target), physical.maxKickSpeedMps * 0.55) },
+      power: passingPower(distance(ball.position, target), physical.maxKickSpeedMps * 0.55, ballOf(tactics.world)) },
     pass: option ? { receiverId: option.receiverId, target } : undefined,
   };
 }
@@ -209,7 +218,7 @@ function carrying(tactics: Tactics, player: PlayerState): PlayerIntent {
     return {
       ...idle(player),
       request: { kind: "kick", kickType: "pass", direction: direction(origin, pass.target, tactics.attack),
-        power: passingPower(pass.range, passSpeed), loft: 0 },
+        power: passingPower(pass.range, passSpeed, ballOf(tactics.world)), loft: 0 },
       pass: { receiverId: pass.receiverId, target: pass.target },
     };
   }
@@ -222,18 +231,26 @@ function carrying(tactics: Tactics, player: PlayerState): PlayerIntent {
   return dribble;
 }
 
+/**
+ * Seconds to run to `target`, matching the engine's sprint: acceleration a0 (1 - v / V) toward top speed V, so
+ * v(t) = V - (V - u) e^(-t / tau) and x(t) = V t - (V - u) tau (1 - e^(-t / tau)) with tau = V / a0.
+ */
 function estimateArrival(player: PlayerState, target: Vec2): number {
   const offset = difference(player.position, target);
   const range = length(offset);
   const physical = player.definition.abilities.physical;
   const cruise = physical.maxSpeedMps * (0.75 + player.stamina * 0.25);
   const speedToward = (player.velocity.x * offset.x + player.velocity.y * offset.y) / Math.max(range, 1e-8);
-  const acceleration = physical.accelerationMps2;
-  const timeToCruise = Math.max(0, (cruise - speedToward) / acceleration);
-  const accelerationDistance = speedToward * timeToCruise + 0.5 * acceleration * timeToCruise ** 2;
-  return range < accelerationDistance
-    ? (-speedToward + Math.sqrt(speedToward ** 2 + 2 * acceleration * range)) / acceleration
-    : timeToCruise + Math.max(0, range - accelerationDistance) / cruise;
+  const tau = cruise / physical.accelerationMps2;
+  const gap = cruise - speedToward;
+  let time = range / cruise + Math.max(0, gap) / physical.accelerationMps2;
+  for (let i = 0; i < 6; i++) {
+    const decay = Math.exp(-time / tau);
+    const covered = cruise * time - gap * tau * (1 - decay);
+    const speed = Math.max(0.5, cruise - gap * decay);
+    time = Math.max(0, time - (covered - range) / speed);
+  }
+  return time;
 }
 
 function interception(tactics: Tactics, player: PlayerState): { target: Vec2; eta: number } {
@@ -242,7 +259,7 @@ function interception(tactics: Tactics, player: PlayerState): { target: Vec2; et
   let target: Vec2 = onPitch(tactics, position);
   let eta = estimateArrival(player, target);
   for (let time = 0.15; time <= maxLookahead; time += 0.15) {
-    target = onPitch(tactics, lead(position, velocity, time * (position.z < 0.25 ? 1 - 0.16 * time : 1)));
+    target = onPitch(tactics, ballPositionAfter(position, velocity, time, ballOf(tactics.world)));
     eta = estimateArrival(player, target);
     if (eta <= time) break;
   }
@@ -274,16 +291,15 @@ function formation(tactics: Tactics, player: PlayerState, mode: Mode): Vec2 {
 }
 
 function saveAim(tactics: Tactics, player: PlayerState, ownGoalX: number): Vec2 | undefined {
-  const { ball, ballConfig, pitch, tuning } = tactics.world;
+  const { ball, pitch, tuning } = tactics.world;
   const { windup, active } = keeperSaveTiming(player.definition.abilities.technical.goalkeeping);
-  const ballRadius = ballConfig?.radiusM ?? 0.11;
-  const gravity = ballConfig?.gravityMps2 ?? 9.81;
+  const ballRadius = ballOf(tactics.world).radiusM;
   let best: { aim: Vec2; miss: number } | undefined;
 
   for (let tick = windup; tick < windup + active; tick++) {
     const time = tick / 60;
-    const predicted = lead(ball.position, ball.velocity, time);
-    const height = Math.max(ballRadius, ball.position.z + ball.velocity.z * time - 0.5 * gravity * time ** 2);
+    const predicted = ballPositionAfter(ball.position, ball.velocity, time, ballOf(tactics.world));
+    const height = predicted.z;
     const areaDepth = (predicted.x - ownGoalX) * tactics.attack;
     if (areaDepth < 0 || areaDepth > pitch.keeperAreaDepthM ||
         Math.abs(predicted.y) > pitch.keeperAreaWidthM / 2) continue;
@@ -332,7 +348,7 @@ function goalkeeper(tactics: Tactics, player: PlayerState): PlayerIntent {
     const roll = range < Math.min(11, physical.maxKeeperRollSpeedMps ** 2 * 0.22);
     return { ...idle(player), request: {
       kind: "keeperRelease", technique: roll ? "roll" : "throw", direction: direction(player.position, target, attack),
-      power: roll ? passingPower(range, physical.maxKeeperRollSpeedMps)
+      power: roll ? passingPower(range, physical.maxKeeperRollSpeedMps, ballOf(tactics.world))
         : clamp(range / physical.maxKeeperThrowSpeedMps, 0.32, 0.82),
     } };
   }
@@ -362,8 +378,7 @@ function passingRun(tactics: Tactics, player: PlayerState, intention: PassIntent
       const offset = difference(position, player.position);
       const along = (offset.x * velocity.x + offset.y * velocity.y) / speed;
       const across = (offset.x * velocity.y - offset.y * velocity.x) / speed;
-      const friction = tactics.world.ballConfig?.groundDecelerationMps2 ?? 1.6;
-      if (along > 0 && speed ** 2 - along * 2 * friction > 4.5 ** 2) {
+      if (along > 0 && rollSpeedAfter(speed, along, ballOf(tactics.world)) > 4.5) {
         const lane = {
           x: player.position.x - (across * velocity.y + 0.3 * velocity.x) / speed,
           y: player.position.y + (across * velocity.x - 0.3 * velocity.y) / speed,
