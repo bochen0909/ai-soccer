@@ -34,6 +34,7 @@ export const DEFAULT_REWARD: RewardWeights = {
   outOfBounds: 0,
   shotOnTarget: 0,
   ownThirdGiveaway: 0,
+  regain: 0,
 };
 
 type RewardTerms = StepInfo["rewardTerms"];
@@ -65,6 +66,8 @@ export class SoccerTrainingEnv {
   private readonly passBonusOnce: boolean;
   private readonly goalNeedsPass: boolean;
   private readonly endOnSave: boolean;
+  private readonly endOnRegain: boolean;
+  private regained = false;
   private readonly possessionByLastTouch: boolean;
   /** Team of the last player to touch the ball (true: ours), from the scenario's carrier at the start, or null after a goal. */
   private holder: boolean | null = null;
@@ -107,6 +110,7 @@ export class SoccerTrainingEnv {
     this.passBonusOnce = options.passBonusOnce ?? false;
     this.goalNeedsPass = options.goalNeedsPass ?? false;
     this.endOnSave = options.endOnSave ?? false;
+    this.endOnRegain = options.endOnRegain ?? false;
     this.possessionByLastTouch = options.possessionByLastTouch ?? false;
     this.weights = { ...DEFAULT_REWARD, ...options.reward };
     this.opponent = options.opponent ?? { pluginId: "baseline" };
@@ -134,6 +138,7 @@ export class SoccerTrainingEnv {
     }, scenario);
     if (failures.length > 0) throw new Error(`Controller failure: ${failures.map(({ message }) => message).join(" | ")}`);
     this.passRewarded = false;
+    this.regained = false;
     this.holder = scenario ? this.learnerPlayers.has(scenario.ball.lastTouchPlayerId) : null;
     this.steps = 0;
     this.done = false;
@@ -142,7 +147,7 @@ export class SoccerTrainingEnv {
     this.kickedPast = new Set();
     this.passInFlight = false;
     this.feedback.clear();
-    const zero = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0, ownThirdGiveaway: 0 };
+    const zero = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0, ownThirdGiveaway: 0, regain: 0 };
     return this.result(0, false, false, 0, zero);
   }
 
@@ -179,7 +184,7 @@ export class SoccerTrainingEnv {
     const attack = before.attackDirections[this.learnerIndex];
     const startedLive = before.phase.kind === "live";
     let interrupted = false;
-    const terms = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0, ownThirdGiveaway: 0 };
+    const terms = { goalScored: 0, goalConceded: 0, ballProgress: 0, possession: 0, passCompleted: 0, assist: 0, turnover: 0, passBreak: 0, save: 0, passFailed: 0, outOfBounds: 0, shotOnTarget: 0, ownThirdGiveaway: 0, regain: 0 };
     this.feedback.clear();
     let elapsed = 0;
     let finished = false;
@@ -193,6 +198,7 @@ export class SoccerTrainingEnv {
         if (this.scoreEvent(event, terms)) interrupted = true;
         if (this.endOnDeadBall && (event.kind === "goal" || event.kind === "ballExit")) finished = true;
         if (this.endOnBallLoss && this.rivalTouched(event)) finished = true;
+        if (this.endOnRegain && this.regained) finished = true;
         if (this.endOnSave && event.kind === "actionContact" && this.learnerPlayers.has(event.action.playerId) &&
             (event.outcome === "caught" || event.outcome === "parried")) finished = true;
       }
@@ -254,7 +260,7 @@ export class SoccerTrainingEnv {
   }
 
   /** Returns true when the event ends continuous play. */
-  private scoreEvent(event: MatchEvent, terms: { goalScored: number; goalConceded: number; passCompleted: number; assist: number; turnover: number; passBreak: number; save: number; passFailed: number; outOfBounds: number; shotOnTarget: number; ownThirdGiveaway: number }): boolean {
+  private scoreEvent(event: MatchEvent, terms: { goalScored: number; goalConceded: number; passCompleted: number; assist: number; turnover: number; passBreak: number; save: number; passFailed: number; outOfBounds: number; shotOnTarget: number; ownThirdGiveaway: number; regain: number }): boolean {
     if (event.kind === "goal") {
       this.lastTouchLearner = null;
       this.holder = null;
@@ -282,6 +288,11 @@ export class SoccerTrainingEnv {
     }
     const toucher = event.kind === "ballTouch" ? event.playerId
       : event.kind === "actionContact" && event.outcome !== "missed" ? event.action.playerId : undefined;
+    if (toucher !== undefined && this.learnerPlayers.has(toucher) && this.holder === false && !this.regained) {
+      // A learner touches the ball after the opponent had it.
+      this.regained = true;
+      terms.regain += this.weights.regain * this.shapingScale;
+    }
     if (toucher !== undefined) {
       const learner = this.learnerPlayers.has(toucher);
       if (this.lastTouchLearner !== null && this.lastTouchLearner !== learner) {
@@ -374,7 +385,7 @@ export class SoccerTrainingEnv {
     const reward = rewardTerms.goalScored + rewardTerms.goalConceded + rewardTerms.ballProgress +
       rewardTerms.possession + rewardTerms.passCompleted + rewardTerms.assist + rewardTerms.turnover +
       rewardTerms.passBreak + rewardTerms.save + rewardTerms.passFailed + rewardTerms.outOfBounds +
-      rewardTerms.shotOnTarget + rewardTerms.ownThirdGiveaway;
+      rewardTerms.shotOnTarget + rewardTerms.ownThirdGiveaway + rewardTerms.regain;
     const score = [observation.score[this.learnerIndex], observation.score[1 - this.learnerIndex]] as const;
     return {
       observation: data, actionMask, agentMask, reward, terminated, truncated,

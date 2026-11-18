@@ -36,7 +36,11 @@ const PURE_REWARDS = { shoot: { goalScored: 1 }, pass: { passCompleted: 1 }, att
   // The keeper drill trains the learner's keeper: a catch or parry pays, a goal against costs.
   keeper: { goalScored: 0, save: 1, goalConceded: -1 },
   // Rondo is keep-away: it pays for holding the ball, and ends when a rival touches it.
-  rondo: { goalScored: 0, possession: 0.01 } };
+  rondo: { goalScored: 0, possession: 0.01 },
+  // Replayed situations from a model's own goals against: only the goals count.
+  replay: { goalScored: 1, goalConceded: -1 },
+  // The defending drills (a counterattack against us): winning the ball back pays, a goal against costs. They end on the regain.
+  defend: { goalScored: 0, goalConceded: -1, regain: 1 }, defend2: { goalScored: 0, goalConceded: -1, regain: 1 } };
 const INIT = 1, RESET = 2, STEP = 3, CLOSE = 4, SET_POOL = 5;
 let slots = [];
 let layout;
@@ -69,7 +73,7 @@ function makeEnv(options, learnerTeamId, spec) {
   }
   return new SoccerTrainingEnv({
     config, learnerTeamId, opponent, registry,
-    ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward, passBonusOnce: options.passBonusOnce, goalNeedsPass: options.goalNeedsPass, endOnSave: options.endOnSave, possessionByLastTouch: options.possessionByLastTouch,
+    ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward, passBonusOnce: options.passBonusOnce, goalNeedsPass: options.goalNeedsPass, endOnSave: options.endOnSave, possessionByLastTouch: options.possessionByLastTouch, endOnRegain: options.endOnRegain,
     maxPlayersPerTeam: options.maxPlayersPerTeam, roleFeatures: options.roleFeatures, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall, endOnBallLoss: options.endOnBallLoss,
   });
 }
@@ -144,7 +148,9 @@ function begin(slot, seed) {
       envOptions = { ...envOptions };
       envOptions.reward = { ...PURE_REWARD, ...(slots.options.pureRewards?.[drill] ?? PURE_REWARDS[drill] ?? { goalScored: 1 }) };
       // The rival shooter is meant to touch the ball in the keeper drill, which ends on the keeper's first save instead.
-      envOptions.endOnBallLoss = drill !== "keeper";
+      const defending = drill === "defend" || drill === "defend2";
+      envOptions.endOnBallLoss = ["shoot", "pass", "attack", "rondo"].includes(drill);
+      envOptions.endOnRegain = defending;
       envOptions.endOnSave = drill === "keeper";
       envOptions.possessionByLastTouch = drill === "rondo";
       envOptions.passBonusOnce = true;
@@ -174,7 +180,8 @@ function begin(slot, seed) {
       // The roster slots the trainer learns from in a pure drill: the carrier, and the runner where there is one.
       // The roster slots the trainer learns from in a pure drill: the players the drill is about.
       const roster = slot.current.config.teams[slot.side].players;
-      slot.learn = pure ? (made.involvedIds ?? []).reduce((bits, id) => bits | (1 << roster.findIndex((player) => player.id === id)), 0) : 0;
+      const involved = drill === "replay" ? roster.filter((player) => player.role === "outfield").map(({ id }) => id) : made?.involvedIds ?? [];
+      slot.learn = pure ? involved.reduce((bits, id) => bits | (1 << roster.findIndex((player) => player.id === id)), 0) : 0;
       slot.last = slot.current.reset(episodeSeed, scenario);
       break;
     } catch (error) {

@@ -158,7 +158,7 @@ def main():
     parser.add_argument("--striker-only", action="store_true",
                         help="drills: update the policy only from the last player on the team (the drill's ball carrier); "
                              "the other players still act with the same policy but their samples are ignored")
-    parser.add_argument("--pure-drills", nargs="+", default=None, choices=["shoot", "attack", "pass", "keeper", "rondo"],
+    parser.add_argument("--pure-drills", nargs="+", default=None, choices=["shoot", "attack", "pass", "keeper", "rondo", "defend", "defend2", "replay"],
                         help="episodes of these drill kinds (alone with --drill, or with --drill-mix) are pure: the only rewards are the goal "
                              "and, for attack and pass, a pass bonus paid once; they end when a rival touches the ball; the policy learns only from the "
                              "carrier (shoot) or the carrier and the runner (attack, pass). Other episodes are unchanged")

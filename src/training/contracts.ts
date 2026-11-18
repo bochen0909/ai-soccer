@@ -64,6 +64,8 @@ export interface RewardWeights {
   passBreak: number;
   /** Added when a learner keeper catches or parries the ball. */
   save: number;
+  /** Added once when a learner player touches the ball after the opponent had it (the last toucher before was theirs). */
+  regain: number;
   /** Negative: an opponent takes the ball from us within 20 m of our goal line (a giveaway the counterattack can punish). */
   ownThirdGiveaway: number;
   /** Negative: a learner pass is intercepted or tackled by an opponent before a teammate controls it. */
@@ -107,6 +109,8 @@ export interface TrainingEnvOptions {
   goalNeedsPass?: boolean;
   /** End the episode when a learner keeper catches or parries the ball. */
   endOnSave?: boolean;
+  /** End the episode, and pay `regain`, when a learner player touches the ball after the opponent. Meant for defending drills. */
+  endOnRegain?: boolean;
   /** The possession reward also counts a free ball for the team that touched it last, so a pass in flight keeps paying. */
   possessionByLastTouch?: boolean;
 }
