@@ -60,6 +60,24 @@ Team-level scalar, in `DEFAULT_REWARD`:
 
 `env.shapingScale` multiplies the two shaping terms. Anneal it toward 0 so the policy ends up optimizing goals only.
 
+### Pure drills
+
+A drill can be "pure": `train_ppo.py --pure-drills shoot attack pass keeper rondo` (alone with `--drill`, or with `--drill-mix`). Episodes of a pure kind replace the reward above with their own, end on their own condition, and update the policy only from the players the drill is about. The env server reports those players per episode as a bit mask of roster slots (`learn`).
+
+| Drill | Reward | Ends when | Learns from |
+| --- | --- | --- | --- |
+| `shoot` | goal +1 | goal, ball out, a rival touches the ball, 60 steps | the carrier |
+| `pass` | first completed pass +1 | same | carrier and runner |
+| `attack` | pass +0.5, goal +0.5 (the goal pays only after the pass) | same | carrier and runner |
+| `keeper` | catch or parry +1, goal against -1 | the keeper's first save, goal, ball out, 60 steps | the learner keeper |
+| `rondo` | +0.01 per step for holding the ball, or for a ball in flight that we touched last; -0.01 for theirs | a rival touches the ball, ball out, 90 steps | the four ring players |
+
+Every drill draws its learner outfield players (carrier, runner and so on) and the rivals' outfield players at random, per episode, and never the keepers. Override the rewards with `--pure-rewards '{"attack": {"passCompleted": 0.5, "goalScored": 0.5}}'`. Env options behind this: `endOnBallLoss`, `endOnSave`, `passBonusOnce`, `goalNeedsPass`, `possessionByLastTouch`.
+
+### Separate goalkeeper network
+
+`train_ppo.py --keeper-net` trains a second network for the keeper (roster slot 0) next to the outfield network (`TeamPolicy`). It starts as a copy of the `--init` policy, and the two networks learn from separate samples. Exported JSON files carry it as an optional `keeper` block; files without one play with one network for everyone, so every older model still loads. `load_policy` in `python/train_ppo.py` reads both checkpoint formats.
+
 ## Teacher labels, imitation and export
 
 - `scripts/record-demos.mjs` records a baseline profile's decisions in this document's observation and action format. `intentToChoice` converts a controller's decision to `[move, sprint, act]`: movement snaps to the nearest of 8 directions, and a pass becomes "pass to slot k", using the named receiver or else the best-aligned legal teammate.

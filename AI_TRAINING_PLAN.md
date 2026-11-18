@@ -324,3 +324,38 @@ Gen16: init gen15, new `lane` drill (a blocked outlet ahead, a free one to the s
 Gen17 = gen15's exact recipe from gen15 on the new kickoff rules. Head to head vs gen15: gen15 won by 0.52, 0.37 and 0.10 on three seed sets. Against tuned: W66 D12 L18, GF 1.96, GA 0.85, passes to a teammate 2.64 (to an opponent 1.61). Retraining on the new rules gave no gain: the run-to-run spread at this level (about 0.3 goals) is as large as the improvements of the last few generations.
 
 Blends of gen15 and gen16 weights (30% and 50% of gen16) were level with gen15 head to head (differences within +/-0.24). The 50% blend against tuned: W66 D17 L13, GF 2.05, GA 0.75, passes 2.77, keeper saves 0.17 per match (gen15 0.03). Kept as `models/candidates/blend_15_16_50.json`; not promoted.
+
+## Pure drills, a separate keeper network and generations 18 to 23, none promoted
+
+Tooling added (details in `TRAINING.md`): pure drills (`--pure-drills shoot attack pass keeper rondo`: their own reward, their own ending, learning only from the players the drill is about), random carrier, runner and rival players in every drill, a separate keeper network (`--keeper-net`, optional `keeper` block in the exported JSON, older files unchanged), league flags (`--snapshot-every 0`, no cap on anchors, `--pfsp-floor`, `--possession`), and the evaluation scripts `evaluate_drill.py`, `evaluate_attack_passes.py`, `evaluate_keeper.py` and `evaluate_rondo.py`.
+
+Drill results (512 held-out episodes, from gen15 or `role_pass2`, drill-only training of 200 iterations; these runs wrecked match play, so they are tests, not models):
+
+| Drill | Before | After |
+| --- | --- | --- |
+| shoot, fixed striker | 57% scored | 87% |
+| pass | 2% completed a pass | 91% |
+| attack from gen15 | 0% passes, 19% scored (solo) | 0% passes: the pass is not found; started from the pass policy it also stayed at 0% |
+| keeper, shared network | 7.8% saved | 21.9% |
+| keeper, separate network (outfield weights bit-identical) | 10.5% saved | 39.1%, no gain in matches |
+
+With random roles, a mix of shoot, pass and attack kept match play (+1.25 against the default CPU) and passing in the pass drill (56%), where the fixed-role mixes lost one or the other. Attack still never learned to pass.
+
+Generations, all from the previous best and the gen17 recipe unless stated: gen18 (pure drills added), gen19 (init gen15, all 13 anchors plus both CPUs), gen20 (the 8 strongest anchors plus gen19), gen21 (separate keeper, 10-model league), gen22 (the 10 opponents gen21 did worst against, no CPUs), gen23 (24-model pool, draw weight (1.1 - win rate)^4 with a floor of 0.01, no global possession reward). Findings on the way: a league of only strong, similar opponents forgets how to beat the rest (gen20, gen21), dropping the CPUs from the pool costs about 1.2 goals against both (gen22), and a weighted full pool did not fix either (gen23). The keeper's drill saves fell with each league run (36%, 29%, 28%, 17%) and never showed in matches.
+
+**Evaluation offset.** `evaluate_checkpoint.py` and the in-training evaluations play the learner through the training environment, and a model scores about +0.5 to +1.1 against itself there (gen15 +0.47 and +0.59, gen19 +0.70), against 0 as two ordinary controllers (300 matches: -0.04 and +0.16). Ablations ruled out the network code, the inputs (identical rows and masks), the engine (a replay of recorded decisions gives identical match hashes), action feedback, step length, opponent timing and kickoff order. The cause was not found; the leading guess is the controller's random stream, seeded identically for both teams. Absolute margins from that path overstate strength, and gen19 looked better than gen15 there (+0.83) when it is not. Use `npm run arena` for every promotion, as above.
+
+Arena, three seed sets (64, 96 and 96 matches per pair, sides alternating; goal difference from the first player's view):
+
+| Pair | Pooled |
+| --- | --- |
+| gen15 vs gen19 | +0.18 |
+| gen15 vs gen21 | +0.05 |
+| gen15 vs gen23 | +0.24 |
+| gen19 vs gen21 | -0.21 |
+| gen19 vs gen23 | -0.01 |
+| gen21 vs gen23 | +0.18 |
+
+First seed set, 64 matches against all players: ratings gen21 +0.58, gen19 +0.55, gen15 +0.54, gen23 +0.34, gen20 +0.28, gen18 +0.18, gen22 +0.04, tuned -0.18, default -2.33. Against tuned: gen19 +1.70, gen15 +1.55, gen21 +1.45, gen23 +0.81, gen22 +0.58. Gen15 is ahead of or level with every later generation (against gen18, gen20 and gen22 too: +0.16, +0.11, +0.17), and none of them beats it, so **gen15 stays the promoted model**. Candidates are kept in `models/candidates/` (gen13 to gen23, plus `role_gen19_keeper`); gen19 is also in `models/anchors/`.
+
+Open: attack drill passing (a curriculum from an easy layout), a keeper that does not regress in league runs (freeze it outside keeper drills, or train it apart), and finding the evaluation offset.
