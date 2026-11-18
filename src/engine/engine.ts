@@ -24,6 +24,7 @@ function stageTick(state: EngineState): EngineState {
       velocity: { ...player.velocity },
     })),
     requestIds: new Map(state.requestIds),
+    challengeReadyTick: { ...state.challengeReadyTick },
     events: [],
   };
 }

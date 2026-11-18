@@ -19,6 +19,8 @@ export interface EngineState {
   rngState: number;
   keeperReleaseTick: number | null;
   touchExclusion: { playerId: PlayerId; untilTick: number } | null;
+  /** Tick from which each player may again contest an opponent's dribble with their body. */
+  challengeReadyTick: Record<PlayerId, number>;
   nextDribbleTouchTick: number;
   requestIds: Map<PlayerId, number>;
   nextRuleRequestId: number;
@@ -229,9 +231,16 @@ export function keeperHoldPosition(player: PlayerState, ballRadiusM: number, pit
   };
 }
 
+/** Ball centres up to this fraction of body height can be controlled with the feet, thigh or chest; above it is a header. */
+export const CONTROL_HEIGHT_FRACTION = 0.58;
+
+export function controlHeight(player: PlayerState): number {
+  return player.definition.bodyHeightM * CONTROL_HEIGHT_FRACTION;
+}
+
 export function inDribbleReach(player: PlayerState, position: Vec3, ballRadiusM: number): boolean {
   return distance(position, player.position) <= player.definition.abilities.physical.reachM + tolerance &&
-    position.z <= ballRadiusM + player.definition.radiusM + tolerance;
+    position.z <= Math.max(ballRadiusM, controlHeight(player)) + tolerance;
 }
 
 function defaultPlayers(config: MatchConfig, period: 1 | 2): PlayerState[] {
@@ -583,6 +592,7 @@ export function buildResetState(config: MatchConfig, seed: number, scenario?: Sc
     rngState: seed,
     keeperReleaseTick: null,
     touchExclusion: null,
+    challengeReadyTick: {},
     nextDribbleTouchTick: 0,
     requestIds: new Map(),
     nextRuleRequestId: 1,

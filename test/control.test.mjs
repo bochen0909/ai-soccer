@@ -429,7 +429,7 @@ test('the baseline keeper reads a reachable shot, catches it, and releases it', 
   setup.scenario.ball.velocity = { x: 12, y: 0, z: 0 };
   const session = new MatchSession();
   session.reset(setup.config, 17, {}, setup.scenario);
-  const results = Array.from({ length: 35 }, () => session.step());
+  const results = Array.from({ length: 50 }, () => session.step());
   const events = results.flatMap((result) => result.events);
   assert.ok(events.some(({ kind, outcome, action }) =>
     kind === 'actionContact' && outcome === 'caught' && action.playerId === 'away-keeper'));

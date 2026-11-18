@@ -1,5 +1,5 @@
 import type { AttackDirection, PlayerId, TeamObservation, Vec2 } from "../contracts/index.js";
-import { keeperSaveTiming, keeperSaveVolumes } from "../engine/keeper-save.js";
+import { keeperDiveExtension, keeperSaveTiming, keeperSaveVolumes } from "../engine/keeper-save.js";
 import { capsuleDistanceSquared } from "../engine/physics-geometry.js";
 import type {
   AIContext, ControlAssignment, PassIntention, PlayerIntent, TeamAI, TeamDecisionContext,
@@ -289,7 +289,8 @@ function saveAim(tactics: Tactics, player: PlayerState, ownGoalX: number): Vec2 
         Math.abs(predicted.y) > pitch.keeperAreaWidthM / 2) continue;
     const position = lead(player.position, player.velocity, time);
     const aim = direction(position, predicted, tactics.attack);
-    for (const volume of keeperSaveVolumes({ ...player, position }, aim, tuning?.keeperReachScale)) {
+    for (const volume of keeperSaveVolumes({ ...player, position }, aim, tuning?.keeperReachScale,
+      keeperDiveExtension(tick - windup))) {
       const miss = Math.sqrt(capsuleDistanceSquared({ ...predicted, z: height }, volume)) - volume.radiusM;
       if (miss < ballRadius && (!best || miss < best.miss)) best = { aim, miss };
     }

@@ -1,9 +1,11 @@
 import type { ActionRequest, PlayerState, Vec3 } from "../contracts/index.js";
 import { executionFactors, footQuality } from "./abilities.js";
-import { keeperSaveTiming, keeperSaveVolumes } from "./keeper-save.js";
+import { dispossessChance } from "./ball-control.js";
+import { DIVE_REACH_M, keeperDiveExtension, keeperSaveTiming, keeperSaveVolumes } from "./keeper-save.js";
 import { along, capsuleDistanceSquared, sweepCapsule } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
 import { attackDirection, keeperHoldPosition } from "./reset.js";
+import { randomUnit } from "./random.js";
 import type { EngineState } from "./reset.js";
 
 export type DefenseRequest = Extract<ActionRequest, { kind: "tackle" | "keeperSave" }>;
@@ -60,8 +62,13 @@ function saveInterval(state: EngineState, keeper: PlayerState, times: [number, n
     clipAxis(times, ballState.position.y, ballState.velocity.y, -halfWidth, halfWidth);
 }
 
+/** How far a save that became active at `activeTick` has stretched into its dive. */
+export function saveExtension(state: EngineState, activeTick: number): number {
+  return keeperDiveExtension(state.tick - activeTick);
+}
+
 export function defenseCandidate(
-  state: EngineState, player: PlayerState, request: DefenseRequest, duration: number,
+  state: EngineState, player: PlayerState, request: DefenseRequest, duration: number, activeTick: number,
 ): { time: number } | undefined {
   const { ball, players } = state;
   const control = ball.control;
@@ -74,7 +81,8 @@ export function defenseCandidate(
   let sweepRadius = 0;
   if (request.kind === "keeperSave") {
     if (player.definition.role !== "goalkeeper" || !saveInterval(state, player, times)) return undefined;
-    volumes = keeperSaveVolumes(player, request.direction, state.config.tuning.keeperReachScale);
+    volumes = keeperSaveVolumes(player, request.direction, state.config.tuning.keeperReachScale,
+      saveExtension(state, activeTick));
     sweepRadius = ballRadius;
   } else {
     if (control.kind === "dribble" &&
@@ -106,14 +114,27 @@ export function defenseCandidate(
 
 export function resolveDefense(
   state: EngineState, player: PlayerState, request: DefenseRequest,
-): "wonBall" | "caught" | "parried" {
+): "wonBall" | "poked" | "caught" | "parried" | "missed" {
   const { ball } = state;
   const maxBallSpeed = state.config.ball.maxSpeedMps;
-  ball.lastTouchPlayerId = player.playerId;
-  delete ball.flightAction;
 
   if (request.kind === "tackle") {
     const skill = player.definition.abilities.technical.tackling;
+    const control = ball.control;
+    if (control.kind === "dribble") {
+      // The dribbler can ride the challenge: the tackle then misses and the ball stays with them.
+      const owner = state.players.find((entry) => entry.playerId === control.playerId)!;
+      if (randomUnit(state) >= dispossessChance(state, player, owner, 0.45)) return "missed";
+    }
+    ball.lastTouchPlayerId = player.playerId;
+    delete ball.flightAction;
+    if (control.kind === "free") {
+      // A tackle at a loose ball pokes it away; collecting a loose ball is a first touch.
+      const speed = Math.min(maxBallSpeed, 2.5 + 3 * skill);
+      ball.velocity = { x: request.direction.x * speed, y: request.direction.y * speed, z: 0 };
+      state.touchExclusion = { playerId: player.playerId, untilTick: state.tick + 4 };
+      return "poked";
+    }
     const distance = Math.hypot(ball.position.x - player.position.x, ball.position.y - player.position.y);
     const controlMargin = Math.max(0, player.definition.abilities.physical.reachM - distance);
     const speed = Math.min(maxBallSpeed, 0.65 + 0.65 * skill, controlMargin * 12);
@@ -124,12 +145,17 @@ export function resolveDefense(
     return "wonBall";
   }
 
+  ball.lastTouchPlayerId = player.playerId;
+  delete ball.flightAction;
   const skill = player.definition.abilities.technical.goalkeeping;
   const { exertion, movement, pressure } = executionFactors(state, player);
   const relativeSpeed = Math.hypot(
     ball.velocity.x - player.velocity.x, ball.velocity.y - player.velocity.y, ball.velocity.z,
   );
-  const catchLimit = (6 + 14 * skill) * exertion * movement * pressure;
+  // A ball met at full stretch is mostly parried; one within standing reach is as easy to hold as before.
+  const away = Math.hypot(ball.position.x - player.position.x, ball.position.y - player.position.y);
+  const stretch = 1 - 0.45 * Math.max(0, Math.min(1, (away - player.definition.abilities.physical.reachM) / DIVE_REACH_M));
+  const catchLimit = (6 + 14 * skill) * exertion * movement * pressure * stretch;
   state.nextDribbleTouchTick = state.tick;
   if (relativeSpeed <= catchLimit) {
     ball.position = keeperHoldPosition(player, state.config.ball.radiusM, state.config.pitch);

@@ -240,7 +240,7 @@ export type MatchEvent = { tick: number; ordinal: number } & (
   | {
       kind: "actionContact";
       action: ActionKey;
-      outcome: "kicked" | "thrown" | "released" | "wonBall" | "caught" | "parried" | "missed";
+      outcome: "kicked" | "thrown" | "released" | "wonBall" | "poked" | "caught" | "parried" | "missed";
       position: Vec3;
       flightAction?: ActionKey;
     }

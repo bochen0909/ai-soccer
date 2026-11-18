@@ -17,3 +17,11 @@ test("keeperReachScale lengthens the save, and leaves it as it was when unset", 
   assert.equal(length(same), length(base));
   assert.ok(length(longer) > length(base));
 });
+
+test("a save stretches into a dive over its active window", () => {
+  const direction = { x: 0, y: 1 };
+  const reachOf = (extension) => Math.max(...keeperSaveVolumes(player(), direction, 1, extension).map(length));
+  assert.ok(reachOf(0.5) > reachOf(0));
+  assert.ok(reachOf(1) > reachOf(0.5));
+  assert.equal(reachOf(2), reachOf(1));
+});

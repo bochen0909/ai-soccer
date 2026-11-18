@@ -222,8 +222,10 @@ function launch(
   const skill = request.kind === "keeperRelease" ? technical.goalkeeping :
     request.kind === "kick" && request.kickType === "shot" ? technical.shooting : technical.passing;
   const factors = executionFactors(state, player);
-  const foot = request.kind === "kick" && !isSetup(state.phase) ? footQuality(player, state.ball.position) : 1;
-  const quality = factors.fatigue * factors.balance * factors.movement * factors.pressure * foot;
+  const openPlayKick = request.kind === "kick" && !isSetup(state.phase);
+  const foot = openPlayKick ? footQuality(player, state.ball.position) : 1;
+  const turn = openPlayKick ? facingStrain(player, request.direction) : 0;
+  const quality = factors.fatigue * factors.balance * factors.movement * factors.pressure * foot * (1 - 0.45 * turn);
   const spread = (0.015 + 0.22 * (1 - skill * quality)) * (0.55 + 0.45 * request.power);
   const angle = Math.atan2(request.direction.y, request.direction.x) + (2 * randomUnit(state) - 1) * spread;
   let direction = { x: Math.cos(angle), y: Math.sin(angle) };
@@ -236,7 +238,7 @@ function launch(
   const elevation = elevationDegrees * Math.PI / 180;
   const powerError = (2 * randomUnit(state) - 1) * (1 - skill * quality) * (0.02 + 0.14 * request.power);
   const speed = Math.min(state.config.ball.maxSpeedMps,
-    maxSpeed * clampUnit(request.power * (1 + powerError)) * factors.exertion);
+    maxSpeed * clampUnit(request.power * (1 + powerError)) * factors.exertion * (1 - 0.35 * turn));
   const radius = state.config.ball.radiusM;
 
   if (request.kind === "throwIn") {
@@ -276,6 +278,16 @@ function launch(
     outcome: request.kind === "kick" ? "kicked" : request.kind === "throwIn" ? "thrown" : "released",
     position: { ...state.ball.position },
   });
+}
+
+/**
+ * How far a kick is struck away from the way the player faces: 0 up to 60 degrees either side, rising to 1 for a ball
+ * played straight behind. Turning toward the kick during the windup removes it.
+ */
+function facingStrain(player: PlayerState, direction: Vec2): number {
+  const facing = Math.atan2(direction.y, direction.x) - player.facingRad;
+  const angle = Math.abs(Math.atan2(Math.sin(facing), Math.cos(facing)));
+  return Math.max(0, Math.min(1, (angle - Math.PI / 3) / (2 * Math.PI / 3)));
 }
 
 function openKickoffLane(state: EngineState, player: PlayerState, direction: Vec2): void {
@@ -321,7 +333,8 @@ export function interruptAction(
 
 export function finishDefenseContact(
   state: EngineState, slots: ActionSlots, pending: PendingAction, events: EventData[],
-  outcome: "wonBall" | "caught" | "parried", position: EngineState["ball"]["position"], flightAction?: ActionKey,
+  outcome: "wonBall" | "poked" | "caught" | "parried" | "missed", position: EngineState["ball"]["position"],
+  flightAction?: ActionKey,
 ): void {
   events.push({ kind: "actionContact", action: pending.action, outcome, position, flightAction });
   enterRecovery(state, slots, pending);

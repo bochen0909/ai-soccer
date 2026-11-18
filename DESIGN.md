@@ -189,6 +189,8 @@ The coordinator supplies a monotonically increasing request ID per player for th
 
 Ball control describes a player’s opportunity to touch the ball. Dribbling uses bounded touches driven by movement and skill, with the ball retaining its own position and velocity. Sprinting can make touches longer and increase the chance of losing control. A receiving player must reach the ball and execute a first touch. A pass aim or tactical receiver designation provides no guarantee of possession.
 
+Balls up to 58% of body height can be controlled with the feet, thigh or chest; higher ones are headers. Control gets less likely above a clean speed set by first touch, and a raised ball is harder to kill; a cushioned ball drops into the dribble pocket. A slow, low ball meeting a body is a touch, not a bounce: the dribbler running onto their own ball keeps it, a loose ball is trapped, and an opponent's body contests a dribble on tackling against dribbling (at most once per half second), otherwise shielding the ball with a soft bounce. A tackle on a dribble succeeds by the same contest, made easier by a heavy touch, and otherwise misses; a tackle at a loose ball pokes it away. The player who just played the ball does not block it with their own body. While a dribbler winds up a kick the ball moves with them. A kick struck more than 60 degrees from the way the player faces loses accuracy and power.
+
 ### Action lifecycle and feedback
 
 Each player has one action slot, with `ready`, `windup`, `active`, and `recovery` states. Technique tuning supplies bounded durations in ticks. Kick contact is an instantaneous event at the end of windup. Tackles and saves have a bounded active interval. Aim, power, and technique lock when a request is accepted, while physical circumstances and execution error are evaluated at contact.
@@ -252,9 +254,9 @@ Physical values use explicit units. Technical ratings use the inclusive range ze
 | Kicking power | Limits the speed imparted by a deliberate kick |
 | Passing and shooting | Control the spread around the requested aim and power |
 | First touch | Controls the distance and direction of a receiving touch |
-| Dribbling | Controls touch spacing and error while moving with the ball |
-| Tackling | Affects tackle timing, reach within body limits, and recovery |
-| Goalkeeping | Affects save execution and catch control within physical reach |
+| Dribbling | Controls touch spacing and error while moving with the ball, and resistance to tackles and body challenges |
+| Tackling | Affects tackle timing, reach within body limits, recovery, and the chance to take the ball from a dribbler |
+| Goalkeeping | Affects save execution, dive reach, and catch control |
 | Weak foot | Modifies execution when the contact geometry requires the weaker foot |
 | Stamina | Modifies available exertion and execution through explicit curves |
 

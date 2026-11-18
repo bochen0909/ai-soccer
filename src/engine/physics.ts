@@ -1,7 +1,7 @@
 import type { ActionResult, PlayerAction, PlayerId, PlayerState, Vec2, Vec3 } from "../contracts/index.js";
 import { dueLaunch, finishDefenseContact, interruptAction, resolveLaunch } from "./actions.js";
 import type { ActionSlots, EventData, PendingAction } from "./actions.js";
-import { applyDribbleTouch, firstTouchCandidate, resolveFirstTouch, updateDribbleControl } from "./ball-control.js";
+import { applyDribbleTouch, firstTouchCandidate, resolveBodyContact, resolveFirstTouch, updateDribbleControl } from "./ball-control.js";
 import { defenseCandidate, isDefenseRequest, resolveDefense } from "./defense.js";
 import type { DefenseRequest } from "./defense.js";
 import { randomUnit } from "./random.js";
@@ -16,7 +16,7 @@ import {
   sweepCapsule,
 } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
-import { attackDirection, keeperHoldPosition } from "./reset.js";
+import { attackDirection, CONTROL_HEIGHT_FRACTION, keeperHoldPosition } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
 export const PHYSICS_TICK_SECONDS = 1 / 60;
@@ -91,6 +91,7 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
       applyMovement(player, actions.get(player.playerId), substepSeconds);
     }
     applyBallForces(state, substepSeconds);
+    carryBallInKickWindup(state, slots);
 
     let remaining = substepSeconds;
     let eventCount = 0;
@@ -144,7 +145,7 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
           const position = { ...state.ball.position };
           const outcome = resolveDefense(state, event.player, request);
           finishDefenseContact(state, slots, pending, events, outcome, position, flight);
-          if (previous.kind === "dribble" && previous.playerId !== event.player.playerId) {
+          if (outcome !== "missed" && previous.kind === "dribble" && previous.playerId !== event.player.playerId) {
             events.push({ kind: "possessionLost", playerId: previous.playerId, position });
             interruptAction(state, slots, previous.playerId, results,
               request.kind === "tackle" ? "tackled" : "ballUnavailable");
@@ -156,15 +157,30 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
           resolveLaunch(state, slots, event.player, events, results);
           break;
         default:
-          resolveContact(state, event, events, play.actions);
+          resolveContact(state, event, events, play.actions, slots);
       }
       updateDribbleControl(state, events);
+      carryBallInKickWindup(state, slots);
     }
     updateDribbleControl(state, events);
   }
 
   updatePlayerState(state, actions, PHYSICS_TICK_SECONDS);
   return { elapsedSeconds: PHYSICS_TICK_SECONDS };
+}
+
+/**
+ * A dribbler winding up a kick keeps the ball where it is relative to their feet. Without this the slowed windup lets
+ * the ball roll out of reach, so a hard shot on the run never went off. Tackles and body contacts still take it away.
+ */
+function carryBallInKickWindup(state: EngineState, slots: ActionSlots): void {
+  const control = state.ball.control;
+  if (control.kind !== "dribble") return;
+  const pending = slots.get(control.playerId);
+  if (pending?.phase !== "windup" || pending.request.kind !== "kick" ||
+      state.ball.position.z > state.config.ball.radiusM + 1e-6) return;
+  const holder = state.players.find((player) => player.playerId === control.playerId)!;
+  state.ball.velocity = { x: holder.velocity.x, y: holder.velocity.y, z: 0 };
 }
 
 const eventPriority: Record<PhysicsEvent["kind"], number> = {
@@ -291,17 +307,20 @@ function findNextEvent(
       consider({ kind: "ballContact", ...hit, collider: frame });
     }
   }
+  const exclusion = state.touchExclusion;
   for (const player of state.players) {
+    const pending = play.slots.get(player.playerId);
+    // The player who just played the ball takes it around their body, so their kick or touch does not hit themselves.
+    const justPlayed = exclusion?.playerId === player.playerId && state.tick < exclusion.untilTick;
     const relativeVelocity = subtract(velocity, onGround(player.velocity));
-    const hit = sweepCapsule(position, relativeVelocity, radiusM, playerCapsule(player), duration);
+    const hit = justPlayed ? undefined : sweepCapsule(position, relativeVelocity, radiusM, playerCapsule(player), duration);
     // A ball pinched against the ground can overlap several bodies at the same instant.
     // Apply each collider's impulse once until the bodies have advanced in time.
     if (hit && (hit.time > CONTACT_TIME_TOLERANCE || !ballContacts.has(player))) {
       consider({ kind: "ballContact", ...hit, collider: player, player });
     }
-    const pending = play.slots.get(player.playerId);
     if (pending?.phase === "active" && isDefenseRequest(pending.request)) {
-      const contact = defenseCandidate(state, player, pending.request, duration);
+      const contact = defenseCandidate(state, player, pending.request, duration, pending.contactTick);
       if (contact) consider({ time: contact.time, kind: "defense", player, pending, request: pending.request });
     } else if (firstTouchAvailable && pending?.phase !== "windup") {
       const contact = firstTouchCandidate(state, player, play.actions.get(player.playerId), duration);
@@ -354,6 +373,7 @@ function resolveContact(
   event: Exclude<PhysicsEvent, { kind: "crossing" | "firstTouch" | "defense" | "launch" }>,
   events: EventData[],
   actions: ReadonlyMap<PlayerId, PlayerAction>,
+  slots: ActionSlots,
 ): void {
   switch (event.kind) {
     case "wall":
@@ -374,6 +394,8 @@ function resolveContact(
         resolveHeader(state, event.player, event.normal, actions.get(event.player.playerId), events);
         break;
       }
+      if (event.player !== undefined &&
+          resolveBodyContact(state, event.player, event.normal, actions.get(event.player.playerId), slots, events)) break;
       const colliderVelocity = onGround(event.player?.velocity ?? { x: 0, y: 0 });
       const normalSpeed = dot(subtract(state.ball.velocity, colliderVelocity), event.normal);
       const impulseSpeed = -(1 + state.config.ball.contactRestitution) * normalSpeed;
@@ -397,14 +419,13 @@ function resolveContact(
   }
 }
 
-const HEADER_MIN_HEIGHT_FRACTION = 0.58;
 const HEADER_MAX_SPEED_MPS = 22;
 const HEADER_GOAL_RANGE_M = 22;
 
 function canHeader(state: EngineState, player: PlayerState): boolean {
   const { ball } = state;
   return state.config.rules.headerContact === true && ball.control.kind === "free" &&
-    ball.position.z >= player.definition.bodyHeightM * HEADER_MIN_HEIGHT_FRACTION;
+    ball.position.z > player.definition.bodyHeightM * CONTROL_HEIGHT_FRACTION;
 }
 
 /**

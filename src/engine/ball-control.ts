@@ -1,13 +1,44 @@
-import type { PlayerAction, PlayerId, PlayerState, Vec2 } from "../contracts/index.js";
-import type { EventData } from "./actions.js";
+import type { PlayerAction, PlayerId, PlayerState, Vec2, Vec3 } from "../contracts/index.js";
+import type { ActionSlots, EventData } from "./actions.js";
 import { executionFactors, footQuality } from "./abilities.js";
 import { sphereContactTime } from "./physics-geometry.js";
 import { randomUnit } from "./random.js";
-import { inDribbleReach } from "./reset.js";
+import { controlHeight, inDribbleReach } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
 const MAX_RECEIVING_SPEED_MPS = 19;
 const CONTROL_EPSILON = 1e-7;
+/** Outward speed a dribbler's body gives their own ball when they run onto it. */
+const BODY_PUSH_MPS = 0.8;
+/** Restitution of a ball shielded off a body, much softer than a bounce off the goal frame. */
+const SHIELD_RESTITUTION = 0.3;
+/** Ticks before a player whose body met an opponent's dribble can contest it again. */
+const CHALLENGE_COOLDOWN_TICKS = 30;
+
+const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+
+/** Where a dribbler keeps the ball, measured from their centre. */
+export function dribblePocket(player: PlayerState, ballRadiusM: number): number {
+  const { radiusM, abilities } = player.definition;
+  return Math.min(abilities.physical.reachM * 0.88, radiusM + ballRadiusM + 0.16);
+}
+
+/**
+ * Chance that `challenger` takes the ball from `owner`'s dribble. Tackling skill against dribbling skill, and a heavy
+ * touch (the ball out beyond the owner's pocket) makes it much easier. `base` is the even-skill chance at the pocket.
+ */
+export function dispossessChance(state: EngineState, challenger: PlayerState, owner: PlayerState, base: number): number {
+  const { ball } = state;
+  const ballRadius = state.config.ball.radiusM;
+  const tackle = challenger.definition.abilities.technical.tackling * executionFactors(state, challenger).exertion;
+  const dribble = owner.definition.abilities.technical.dribbling * executionFactors(state, owner).exertion *
+    footQuality(owner, ball.position);
+  const pocket = dribblePocket(owner, ballRadius);
+  const reach = owner.definition.abilities.physical.reachM;
+  const away = Math.hypot(ball.position.x - owner.position.x, ball.position.y - owner.position.y);
+  const loose = clamp((away - pocket) / Math.max(CONTROL_EPSILON, reach - pocket), 0, 1);
+  return clamp(base + 0.45 * tackle - 0.4 * dribble + 0.5 * loose, 0, 1);
+}
 
 function rotate(direction: Vec2, angle: number): Vec2 {
   const cos = Math.cos(angle);
@@ -35,7 +66,7 @@ export function firstTouchCandidate(
   const ballRadius = state.config.ball.radiusM;
   const { radiusM, abilities } = player.definition;
   const reach = Math.min(abilities.physical.reachM, radiusM + ballRadius + 0.35);
-  const maxHeight = ballRadius + Math.min(radiusM, 0.3);
+  const maxHeight = Math.max(ballRadius, controlHeight(player));
   const velocity = {
     x: ball.velocity.x - player.velocity.x,
     y: ball.velocity.y - player.velocity.y,
@@ -80,14 +111,25 @@ export function resolveFirstTouch(
   const factors = executionFactors(state, player);
   const skill = player.definition.abilities.technical.firstTouch;
   const foot = footQuality(player, ball.position);
-  const cleanSpeed = (4.5 + 12 * skill) * factors.exertion * factors.movement * factors.pressure * foot;
+  // A ball taken on the thigh or chest is harder to kill than one on the ground.
+  const ballRadius = state.config.ball.radiusM;
+  const height = clamp((ball.position.z - ballRadius) / Math.max(CONTROL_EPSILON, controlHeight(player) - ballRadius), 0, 1);
+  const cleanSpeed = (5.5 + 12 * skill) * factors.exertion * factors.movement * factors.pressure * foot * (1 - 0.3 * height);
   const incomingSpeed = Math.hypot(ball.velocity.x - player.velocity.x,
     ball.velocity.y - player.velocity.y, ball.velocity.z);
-  const received = incomingSpeed <= cleanSpeed;
-  const angleError = (received ? 0.12 : 0.38) * (1 - 0.7 * skill);
+  // Above the clean speed control gets less likely rather than impossible; at 1.5 times it always fails.
+  const chance = incomingSpeed <= cleanSpeed ? 1 : clamp(1 - (incomingSpeed - cleanSpeed) / (0.5 * cleanSpeed), 0, 1);
+  const received = chance >= 1 || randomUnit(state) < chance;
+  const angleError = (received ? 0.12 : 0.38) * (1 - 0.7 * skill) * (1 + height);
   const direction = rotate(outwardDirection(player, ball.position), (2 * randomUnit(state) - 1) * angleError);
-  const speed = received ? Math.min(1, incomingSpeed * (0.03 + 0.06 * (1 - skill)))
+  let speed = received ? Math.min(1, incomingSpeed * (0.03 + 0.06 * (1 - skill)))
     : Math.min(8, 1.5 + (incomingSpeed - cleanSpeed) * 0.65);
+  if (received && ball.position.z > ballRadius + 0.05) {
+    // A cushioned ball drops toward the feet: it lands in the dribble pocket, give or take the touch error.
+    const fall = Math.sqrt(2 * (ball.position.z - ballRadius) / state.config.ball.gravityMps2);
+    const away = Math.hypot(ball.position.x - player.position.x, ball.position.y - player.position.y);
+    speed = (dribblePocket(player, ballRadius) - away) / Math.max(fall, CONTROL_EPSILON) + speed * 0.3;
+  }
   const velocity = { x: player.velocity.x + direction.x * speed, y: player.velocity.y + direction.y * speed };
   const scale = Math.min(1, state.config.ball.maxSpeedMps / Math.max(CONTROL_EPSILON, Math.hypot(velocity.x, velocity.y)));
   const flightAction = ball.flightAction;
@@ -115,7 +157,8 @@ export function applyDribbleTouch(
   const holderId = ball.control.playerId;
   const player = state.players.find((entry) => entry.playerId === holderId)!;
   const ballRadius = state.config.ball.radiusM;
-  if (!inDribbleReach(player, ball.position, ballRadius)) return;
+  // A ball still dropping from a chest or thigh trap is touched once it reaches the feet.
+  if (!inDribbleReach(player, ball.position, ballRadius) || ball.position.z > ballRadius + 0.05) return;
 
   const action = actions.get(holderId);
   const movement = action?.movement ?? { x: 0, y: 0 };
@@ -132,7 +175,7 @@ export function applyDribbleTouch(
   const outward = outwardDirection(player, ball.position);
   const direction = moving ? { x: movement.x / input, y: movement.y / input } : outward;
   const { radiusM, abilities } = player.definition;
-  const pocket = Math.min(abilities.physical.reachM * 0.88, radiusM + ballRadius + 0.16);
+  const pocket = dribblePocket(player, ballRadius);
   const ahead = (0.15 + (1 - skill) * 0.6 + (sprint ? 1.3 : 0)) * input;
   const angleError = (0.025 + (1 - skill) * 0.32 + (sprint ? 0.1 : 0)) * input;
   const aim = rotate(direction, (2 * randomUnit(state) - 1) * angleError);
@@ -166,4 +209,74 @@ export function updateDribbleControl(state: EngineState, events: EventData[]): v
   ball.control = { kind: "free" };
   state.touchExclusion = { playerId: holderId, untilTick: state.tick + 3 };
   events.push({ kind: "possessionLost", playerId: holderId, position: { ...ball.position } });
+}
+
+function excludedFromTouch(state: EngineState, player: PlayerState): boolean {
+  const exclusion = state.touchExclusion;
+  return exclusion?.playerId === player.playerId && state.tick < exclusion.untilTick;
+}
+
+/** A soft bounce off a body that does not take the ball from whoever is dribbling it. */
+function shield(state: EngineState, player: PlayerState, normal: Vec3, events: EventData[]): void {
+  const { ball } = state;
+  const normalSpeed = (ball.velocity.x - player.velocity.x) * normal.x + (ball.velocity.y - player.velocity.y) * normal.y +
+    ball.velocity.z * normal.z;
+  if (normalSpeed < 0) {
+    const impulse = -(1 + SHIELD_RESTITUTION) * normalSpeed;
+    ball.velocity = {
+      x: ball.velocity.x + normal.x * impulse, y: ball.velocity.y + normal.y * impulse, z: ball.velocity.z + normal.z * impulse,
+    };
+  }
+  ball.lastTouchPlayerId = player.playerId;
+  const flightAction = ball.flightAction;
+  delete ball.flightAction;
+  events.push({ kind: "ballTouch", playerId: player.playerId, outcome: "deflected", position: { ...ball.position }, flightAction });
+}
+
+/**
+ * A ball low and slow enough to control meets a player's body. The dribbler's own body keeps the ball with a soft
+ * touch, a loose ball is trapped (a first touch), and an opponent's dribble is contested on skill, at most once per
+ * cooldown; a lost contest shields the ball off the challenger's body. Returns false for a plain bounce: a ball too
+ * high or too fast, or a loose ball the player cannot touch just now.
+ */
+export function resolveBodyContact(
+  state: EngineState, player: PlayerState, normal: Vec3, action: PlayerAction | undefined, slots: ActionSlots,
+  events: EventData[],
+): boolean {
+  const { ball } = state;
+  if (ball.position.z > controlHeight(player)) return false;
+  const relative = Math.hypot(ball.velocity.x - player.velocity.x, ball.velocity.y - player.velocity.y, ball.velocity.z);
+  if (relative > MAX_RECEIVING_SPEED_MPS) return false;
+  const control = ball.control;
+
+  if (control.kind === "free") {
+    if (excludedFromTouch(state, player) || slots.get(player.playerId)?.phase === "windup") return false;
+    resolveFirstTouch(state, player, action, events);
+    return true;
+  }
+  if (control.kind !== "dribble") return false;
+  if (control.playerId === player.playerId) {
+    const flat = Math.hypot(normal.x, normal.y) || 1;
+    ball.velocity = {
+      x: player.velocity.x + (normal.x / flat) * BODY_PUSH_MPS,
+      y: player.velocity.y + (normal.y / flat) * BODY_PUSH_MPS,
+      z: 0,
+    };
+    events.push({ kind: "ballTouch", playerId: player.playerId, outcome: "dribbled", position: { ...ball.position } });
+    return true;
+  }
+
+  const owner = state.players.find((entry) => entry.playerId === control.playerId)!;
+  const ready = (state.challengeReadyTick[player.playerId] ?? 0) <= state.tick;
+  if (owner.teamId !== player.teamId && ready && !excludedFromTouch(state, player)) {
+    state.challengeReadyTick[player.playerId] = state.tick + CHALLENGE_COOLDOWN_TICKS;
+    if (randomUnit(state) < dispossessChance(state, player, owner, 0.2)) {
+      events.push({ kind: "possessionLost", playerId: owner.playerId, position: { ...ball.position } });
+      ball.control = { kind: "free" };
+      resolveFirstTouch(state, player, action, events);
+      return true;
+    }
+  }
+  shield(state, player, normal, events);
+  return true;
 }
