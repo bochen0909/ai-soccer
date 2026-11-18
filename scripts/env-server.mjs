@@ -75,7 +75,7 @@ function makeEnv(options, learnerTeamId, spec) {
   return new SoccerTrainingEnv({
     config, learnerTeamId, opponent, registry,
     ticksPerStep: options.ticksPerStep, maxSteps: options.maxSteps, reward: options.reward, passBonusOnce: options.passBonusOnce, goalNeedsPass: options.goalNeedsPass, endOnSave: options.endOnSave, possessionByLastTouch: options.possessionByLastTouch, endOnRegain: options.endOnRegain,
-    maxPlayersPerTeam: options.maxPlayersPerTeam, roleFeatures: options.roleFeatures, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall, endOnBallLoss: options.endOnBallLoss,
+    maxPlayersPerTeam: options.maxPlayersPerTeam, endOnDeadBall: options.drill !== undefined || options.endOnDeadBall, endOnBallLoss: options.endOnBallLoss,
   });
 }
 

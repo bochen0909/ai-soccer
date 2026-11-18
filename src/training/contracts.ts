@@ -93,8 +93,6 @@ export interface TrainingEnvOptions {
   maxPlayersPerTeam?: number;
   /** Policy steps before truncation. Defaults to no limit besides match completion. */
   maxSteps?: number;
-  /** Append derived team-role features to every observation row. Defaults to true; false gives the original layout. */
-  roleFeatures?: boolean;
   reward?: Partial<RewardWeights>;
   /** End the episode as soon as a goal is scored or the ball leaves play. Meant for short drills. */
   endOnDeadBall?: boolean;

@@ -439,9 +439,8 @@ test('the baseline keeper reads a reachable shot, catches it, and releases it', 
 });
 
 test('the baseline keeper parries a reachable ground shot and concedes a wider one', () => {
-  function playShot(y, tuningVersion) {
+  function playShot(y) {
     const setup = fixture();
-    setup.config.tuning.version = tuningVersion;
     setup.player('away-keeper').position = { x: 28, y: 0 };
     setup.scenario.ball.position = { x: 26.4, y, z: setup.config.ball.radiusM };
     setup.scenario.ball.velocity = { x: 20, y: 0, z: 0 };
@@ -455,7 +454,6 @@ test('the baseline keeper parries a reachable ground shot and concedes a wider o
     };
   }
 
-  assert.deepEqual(playShot(0.55, 2), { parried: true, goals: 0 });
-  assert.deepEqual(playShot(0.8, 2), { parried: false, goals: 1 });
-  assert.deepEqual(playShot(0.55, 1), { parried: false, goals: 1 });
+  assert.deepEqual(playShot(0.55), { parried: true, goals: 0 });
+  assert.deepEqual(playShot(0.8), { parried: false, goals: 1 });
 });

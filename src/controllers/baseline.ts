@@ -289,7 +289,7 @@ function saveAim(tactics: Tactics, player: PlayerState, ownGoalX: number): Vec2 
         Math.abs(predicted.y) > pitch.keeperAreaWidthM / 2) continue;
     const position = lead(player.position, player.velocity, time);
     const aim = direction(position, predicted, tactics.attack);
-    for (const volume of keeperSaveVolumes({ ...player, position }, aim, tuning?.version === 2, tuning?.keeperReachScale)) {
+    for (const volume of keeperSaveVolumes({ ...player, position }, aim, tuning?.keeperReachScale)) {
       const miss = Math.sqrt(capsuleDistanceSquared({ ...predicted, z: height }, volume)) - volume.radiusM;
       if (miss < ballRadius && (!best || miss < best.miss)) best = { aim, miss };
     }

@@ -11,9 +11,9 @@ const length = (volume) => Math.hypot(volume.end.x - volume.start.x, volume.end.
 
 test("keeperReachScale lengthens the save, and leaves it as it was when unset", () => {
   const direction = { x: 1, y: 0 };
-  const [base] = keeperSaveVolumes(player(), direction, true);
-  const [same] = keeperSaveVolumes(player(), direction, true, undefined);
-  const [longer] = keeperSaveVolumes(player(), direction, true, 1.5);
+  const [base] = keeperSaveVolumes(player(), direction);
+  const [same] = keeperSaveVolumes(player(), direction, undefined);
+  const [longer] = keeperSaveVolumes(player(), direction, 1.5);
   assert.equal(length(same), length(base));
   assert.ok(length(longer) > length(base));
 });

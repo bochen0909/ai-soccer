@@ -76,7 +76,7 @@ export function createArcadeConfig(): MatchConfig {
       directionalKickoff: true,
       randomKickoff: true,
     },
-    tuning: { version: 2 },
+    tuning: {},
   };
 }
 

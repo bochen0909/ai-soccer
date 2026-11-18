@@ -111,8 +111,7 @@ export interface MatchConfig {
   firstKickoffTeamId: TeamId;
   rules: MatchRules;
   tuning: {
-    version: 1 | 2;
-    /** Multiplies how far a goalkeeper's save reaches. Unset means 1, the original behaviour, so older models and records still play as before. */
+    /** Multiplies how far a goalkeeper's save reaches. Unset means 1. */
     keeperReachScale?: number;
   };
 }
