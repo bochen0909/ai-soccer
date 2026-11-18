@@ -147,6 +147,7 @@ def main():
     parser.add_argument("--pass-fail-penalty", type=float, default=0.0, help="penalty (give a positive number) when an opponent wins a pass before a teammate controls it")
     parser.add_argument("--out-penalty", type=float, default=0.0, help="penalty (positive) when we put the ball out of play")
     parser.add_argument("--shot-bonus", type=float, default=0.0, help="reward for a shot on target within 20 m, larger the closer")
+    parser.add_argument("--own-third-penalty", type=float, default=0.0, help="penalty (positive) when an opponent takes the ball within 20 m of our goal line")
     parser.add_argument("--turnover-bonus", type=float, default=0.0, help="reward for winning the ball from the opponent, penalty for losing it")
     parser.add_argument("--assist-bonus", type=float, default=0.0, help="extra reward on a goal scored within 6 s of a completed pass")
     parser.add_argument("--pass-bonus", type=float, default=0.0, help="reward when a teammate receives a pass (drills and full matches)")
@@ -235,10 +236,10 @@ def main():
         options["drillMix"] = {"p": args.drill_mix, "kinds": args.drill_kinds, "maxSteps": 60}
         if args.replay_file:
             options["replayFile"] = os.path.abspath(args.replay_file)
-    if (args.pass_bonus or args.assist_bonus or args.turnover_bonus or args.break_bonus or args.save_bonus or args.pass_fail_penalty or args.out_penalty or args.shot_bonus) and not args.drill:
+    if (args.pass_bonus or args.assist_bonus or args.turnover_bonus or args.break_bonus or args.save_bonus or args.pass_fail_penalty or args.out_penalty or args.shot_bonus or args.own_third_penalty) and not args.drill:
         options["reward"] = {"passCompleted": args.pass_bonus, "assist": args.assist_bonus, "turnover": args.turnover_bonus, "passBreak": args.break_bonus,
                              "save": args.save_bonus, "passFailed": -args.pass_fail_penalty, "outOfBounds": -args.out_penalty,
-                             "shotOnTarget": args.shot_bonus}
+                             "shotOnTarget": args.shot_bonus, "ownThirdGiveaway": -args.own_third_penalty}
     if args.progress is not None:
         options["reward"] = {**options.get("reward", {}), "ballProgress": args.progress}
     if args.possession is not None:

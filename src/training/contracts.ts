@@ -64,6 +64,8 @@ export interface RewardWeights {
   passBreak: number;
   /** Added when a learner keeper catches or parries the ball. */
   save: number;
+  /** Negative: an opponent takes the ball from us within 20 m of our goal line (a giveaway the counterattack can punish). */
+  ownThirdGiveaway: number;
   /** Negative: a learner pass is intercepted or tackled by an opponent before a teammate controls it. */
   passFailed: number;
   /** Negative: the ball leaves play and the restart goes to the opponent, so our side touched it last. */

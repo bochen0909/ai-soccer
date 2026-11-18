@@ -36,7 +36,7 @@ function random(seed: number): () => number {
  *           the way through is a pass to the teammate and a return pass behind the defender
  *   rondo   keep-away in a small square in midfield: four learner players around the square and two rivals inside it,
  *           the carrier is one of the four. There is no goal to score; train it with a reward for holding the ball.
- *   keeper  a lone rival striker with the ball 9 to 18 m from the learner's goal and no defenders, with a second rival
+ *   keeper  a lone rival striker with the ball 3.5 to 18 m from the learner's goal (60% under 9 m) and no defenders, with a second rival
  *           waiting outside the area to press the keeper's release. Trains the learner's keeper.
  * Everyone else holds a spot away from the action. The learner's outfield players are drawn at random for the roles (carrier,
  * runner and so on), and so are the rivals' outfield players (the rival striker, defenders and so on). Both keepers keep their place.
@@ -179,7 +179,8 @@ export function createDrillWithRoles(
       if (back) put(back.id, goalX - between(8, 12), between(-4, 4));
       rest.forEach((foe, index) => put(foe.id, ballAt.x - between(14, 22) - index, (index % 2 ? 1 : -1) * between(2, 12)));
     } else if (kind === "keeper") {
-      ballAt = { x: -goalX + between(9, 18), y: between(-7, 7) };
+      // Most goals against come from under 12 m, so 60% of the shots start between 3.5 and 9 m, the rest as before.
+      ballAt = { x: -goalX + (next() < 0.6 ? between(3.5, 9) : between(9, 18)), y: between(-7, 7) };
       put(attacker.id, ballAt.x + 0.45, ballAt.y);
       const [presser, ...others] = attackMates;
       if (presser) put(presser.id, -goalX + between(11, 15), between(-6, 6));
