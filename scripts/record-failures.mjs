@@ -4,6 +4,7 @@ import {
   AI_PROFILES, createArcadeConfig, createDefaultAIRegistry, decodeWeights, MatchSession, mirrorScenario,
   profileTeamOptions, registerNeuralNetwork,
 } from "../dist/index.js";
+import { withKeeperReach } from "./keeper-reach.mjs";
 
 const usage = `Usage: node scripts/record-failures.mjs --model PATH [--opponents default,tuned,model:PATH] [--matches N] [--lead TICKS] [--out PATH]
 
@@ -17,7 +18,7 @@ const lead = Number(values.lead ?? 300);
 const opponents = (values.opponents ?? "tuned,default").split(",");
 const out = values.out ?? "demos/failures.json";
 const baseSeed = Number(values.seed ?? 7_000_000);
-const config = createArcadeConfig();
+const config = withKeeperReach(createArcadeConfig());
 const network = decodeWeights(JSON.parse(readFileSync(values.model, "utf8")));
 
 const scenarios = [];

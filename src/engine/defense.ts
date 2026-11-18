@@ -74,7 +74,7 @@ export function defenseCandidate(
   let sweepRadius = 0;
   if (request.kind === "keeperSave") {
     if (player.definition.role !== "goalkeeper" || !saveInterval(state, player, times)) return undefined;
-    volumes = keeperSaveVolumes(player, request.direction, state.config.tuning.version === 2);
+    volumes = keeperSaveVolumes(player, request.direction, state.config.tuning.version === 2, state.config.tuning.keeperReachScale);
     sweepRadius = ballRadius;
   } else {
     if (control.kind === "dribble" &&

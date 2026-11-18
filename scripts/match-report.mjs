@@ -7,13 +7,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { createArcadeConfig, createDefaultAIRegistry, MatchSession, profileTeamOptions, registerNeuralNetwork, decodeWeights } from "../dist/index.js";
+import { withKeeperReach } from "./keeper-reach.mjs";
 import { SoccerEngine } from "../dist/engine/engine.js";
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: { matches: { type: "string", default: "16" }, start: { type: "string", default: "0" }, seed: { type: "string", default: "1" } } });
 const [modelPath, opponentSpec] = positionals;
 const network = decodeWeights(JSON.parse(readFileSync(resolve(modelPath), "utf8")));
 const opponentNetwork = opponentSpec.endsWith(".json") ? decodeWeights(JSON.parse(readFileSync(resolve(opponentSpec), "utf8"))) : undefined;
-const config = createArcadeConfig();
+const config = withKeeperReach(createArcadeConfig());
 const half = config.pitch.lengthM / 2;
 const out = { matches: 0, goalsFor: 0, goalsAgainst: 0, points: 0, gaShotDepth: [], gaSinceGain: [], gaGainDepth: [], gaGainKind: {}, gaFromRestartWithin8s: 0,
   sotFor: 0, sotAgainst: 0, saves: 0, giveawaysOwnThird: 0, winsOppThird: 0, pickups: 0, losses: 0 };

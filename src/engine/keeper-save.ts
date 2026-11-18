@@ -5,11 +5,11 @@ export function keeperSaveTiming(skill: number) {
   return { windup: 6 - Math.round(3 * skill), active: 6, recovery: 14 - Math.round(5 * skill) };
 }
 
-export function keeperSaveVolumes(player: PlayerState, direction: Vec2, lowSaves: boolean): Capsule[] {
+export function keeperSaveVolumes(player: PlayerState, direction: Vec2, lowSaves: boolean, reachScale = 1): Capsule[] {
   const { abilities, radiusM: bodyRadius, bodyHeightM } = player.definition;
   const skill = abilities.technical.goalkeeping;
   const exertion = (0.65 + 0.35 * player.stamina) * (0.7 + 0.3 * player.balance);
-  const reach = abilities.physical.reachM * (0.82 + 0.18 * skill) * (0.88 + 0.12 * exertion);
+  const reach = reachScale * abilities.physical.reachM * (0.82 + 0.18 * skill) * (0.88 + 0.12 * exertion);
   const radiusM = Math.min(bodyRadius * 0.92, reach * 0.36);
   const point = (distance: number, z: number) => ({
     x: player.position.x + direction.x * distance,

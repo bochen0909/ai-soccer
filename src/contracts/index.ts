@@ -110,7 +110,11 @@ export interface MatchConfig {
   periodTicks: readonly [number, number];
   firstKickoffTeamId: TeamId;
   rules: MatchRules;
-  tuning: { version: 1 | 2 };
+  tuning: {
+    version: 1 | 2;
+    /** Multiplies how far a goalkeeper's save reaches. Unset means 1, the original behaviour, so older models and records still play as before. */
+    keeperReachScale?: number;
+  };
 }
 
 export type RestartKind = "kickoff" | "throwIn" | "corner" | "goalKick";

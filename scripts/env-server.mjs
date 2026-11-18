@@ -25,6 +25,7 @@ import {
   createDrillWithRoles, createElevenAsideConfig, mirrorScenario, decodeWeights, intentToChoice, profileTeamOptions, registerNeuralNetwork,
   SoccerTrainingEnv, writeActionMask,
 } from "../dist/index.js";
+import { withKeeperReach } from "./keeper-reach.mjs";
 
 /** Every reward term off but scoring. */
 const PURE_REWARD = {
@@ -61,7 +62,7 @@ function baselineConfig(name) {
 }
 
 function makeEnv(options, learnerTeamId, spec) {
-  const config = options.size === 11 ? createElevenAsideConfig() : createArcadeConfig();
+  const config = withKeeperReach(options.size === 11 ? createElevenAsideConfig() : createArcadeConfig());
   if (options.periodTicks) config.periodTicks = [options.periodTicks, options.periodTicks];
   const registry = createDefaultAIRegistry();
   let opponent;

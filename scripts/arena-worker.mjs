@@ -4,6 +4,7 @@ import {
   AI_PROFILES, createArcadeConfig, createDefaultAIRegistry, evaluateMatch, profileTeamOptions, registerNeuralNetwork,
   decodeWeights,
 } from "../dist/index.js";
+import { withKeeperReach } from "./keeper-reach.mjs";
 
 const networks = new Map();
 
@@ -34,7 +35,7 @@ parentPort.on("message", ({ id, seed, a, b, side }) => {
     const mine = team(a, registry, "neural-a");
     const theirs = team(b, registry, "neural-b");
     const teams = side === "home" ? { home: mine, away: theirs } : { home: theirs, away: mine };
-    const { score, status } = evaluateMatch({ seed, config: createArcadeConfig(), teams, registry });
+    const { score, status } = evaluateMatch({ seed, config: withKeeperReach(createArcadeConfig()), teams, registry });
     const [goalsFor, goalsAgainst] = side === "home" ? score : [score[1], score[0]];
     parentPort.postMessage({ id, goalsFor, goalsAgainst, finished: status === "finished" });
   } catch (error) {
