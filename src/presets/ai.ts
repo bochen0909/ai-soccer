@@ -18,16 +18,16 @@ export interface AIProfile {
  *
  * "tuned" is the baseline AI with settings from `npm run tune -- search` on 5-a-side matches against the
  * default profile, retuned after the engine gained first-time kicks, pace-based stamina and collision balance
- * (runs/tune-v2.json). On 200 held-out seeds it beats the default profile by +4.3 goals per match (196 wins) and the
+ * (tuning/search-5v5-v2.json). On 200 held-out seeds it beats the default profile by +4.3 goals per match (196 wins) and the
  * previous tuned settings by +2.1 (159 wins, 28 losses). It presses less than before, keeps the ball until an
  * opponent is close, plays short passes through clear lanes and shoots only from close in. It has not been tuned or
  * checked for 11-a-side.
  *
  * "trained" is a neural network trained by imitating the tuned profile (with team-role features), correcting with DAgger and
  * fine-tuning with PPO (see python/ and AI_TRAINING_PLAN.md). It runs as the "neural" plugin, which must be registered with the
- * weights in models/trained-5v5.json first. The shipped model is gen29, fine-tuned from gen21 on the reworked engine:
- * over 200 held-out 5-a-side matches it scores +2.0 goals per match against the default profile and +1.0 against the
- * tuned one, and it beats gen21 by +1.2 head to head (see the plan).
+ * weights in models/trained-5v5.json first. The shipped model is gen30 (fine-tuned from gen29 on the reworked engine):
+ * over 200 held-out 5-a-side matches it scores +2.9 goals per match against the default profile and +2.4 against the
+ * tuned one, and it is level with or ahead of every earlier model head to head (see the plan).
  */
 export const AI_PROFILES: Readonly<Record<AIProfileId, AIProfile>> = {
   default: { id: "default", label: "Default", tunedFor: "any", config: {} },
