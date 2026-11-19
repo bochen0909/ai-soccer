@@ -6,6 +6,11 @@ state the student visits, and the student retrains on the growing dataset.
 
 Example:
   python3 python/dagger.py --demos demos/tuned --name dagger1 --rounds 8
+
+To fine-tune an existing policy toward a teacher's habits, start from it and skip the recorded demos:
+  python3 python/dagger.py --demos none --init runs/role_gen32b/iter_0100.pt --initial-epochs 0 --lr 1e-4 ...
+A policy with its own keeper network keeps that network as it is: only the outfield network learns, from the outfield
+players' states.
 """
 import argparse
 import json
@@ -16,7 +21,7 @@ import numpy as np
 import torch
 
 from soccer_env import SoccerVecEnv
-from train_ppo import Policy, act as sample_actions, evaluate_policy
+from train_ppo import Policy, TeamPolicy, act as sample_actions, evaluate_policy, load_policy
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -54,7 +59,8 @@ def fit(policy, optimizer, obs, mask, label, epochs, batch, rare_boost, act_weig
 
 
 def rollout(envs, policy, steps, beta, rng):
-    """Student plays; each agent step uses the teacher's action with probability beta. Returns teacher-labelled rows."""
+    """Student plays; each agent step uses the teacher's action with probability beta. Returns teacher-labelled rows.
+    With a separate keeper network the keeper's rows (roster slot 0) are left out, since only the outfield network learns."""
     batches = [env.reset() for env in envs]
     rows_obs, rows_mask, rows_label = [], [], []
     mixed = 0
@@ -64,7 +70,9 @@ def rollout(envs, policy, steps, beta, rng):
             batch = batches[index]
             actions, _, _ = sample_actions(policy, batch, torch.device("cpu"))
             actions = actions.numpy().astype(np.int32)
-            keep = batch.agent_mask
+            keep = batch.agent_mask.copy()
+            if isinstance(policy, TeamPolicy):
+                keep[:, 0] = False
             rows_obs.append(torch.from_numpy(batch.obs[keep]))
             rows_mask.append(torch.from_numpy(batch.mask[keep]))
             rows_label.append(torch.from_numpy(batch.teacher[keep].astype(np.int64)))
@@ -99,11 +107,19 @@ def main():
 
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    obs, mask, label, meta = load_demos(args.demos)
-    hidden = torch.load(args.init)["policy"]["body.0.weight"].shape[0] if args.init else args.hidden
-    policy = Policy(meta["obsSize"], meta["actCount"], hidden=hidden)
+    if args.demos == "none":
+        if not args.init:
+            parser.error("--demos none needs --init")
+        state = torch.load(args.init)["policy"]
+        obs_size, act_count = state["body.0.weight"].shape[1], state["act.weight"].shape[0]
+        obs, mask = torch.zeros(0, obs_size), torch.zeros(0, act_count, dtype=torch.bool)
+        label = torch.zeros(0, 3, dtype=torch.int64)
+    else:
+        obs, mask, label, meta = load_demos(args.demos)
     if args.init:
-        policy.load_state_dict(torch.load(args.init)["policy"])
+        policy = load_policy(torch.load(args.init)["policy"])
+    else:
+        policy = Policy(meta["obsSize"], meta["actCount"], hidden=args.hidden)
     optimizer = torch.optim.Adam(policy.parameters(), lr=args.lr)
     run_dir = os.path.join(ROOT, "runs", args.name)
     os.makedirs(run_dir, exist_ok=True)
@@ -115,7 +131,8 @@ def main():
     print(f"start: {obs.shape[0]} demonstration rows", flush=True)
     started = time.time()
     try:
-        fit(policy, optimizer, obs, mask, label, args.initial_epochs, args.batch, args.rare_boost, args.act_weight)
+        if obs.shape[0] > 0 and args.initial_epochs > 0:
+            fit(policy, optimizer, obs, mask, label, args.initial_epochs, args.batch, args.rare_boost, args.act_weight)
         for round_ in range(1, args.rounds + 1):
             beta = args.beta0 * 0.5 ** (round_ - 1) if round_ <= 4 else 0.0
             new_obs, new_mask, new_label, mixed = rollout(envs, policy, args.rollout_steps, beta, rng)

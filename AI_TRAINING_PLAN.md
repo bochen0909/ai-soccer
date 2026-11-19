@@ -446,3 +446,33 @@ Against Hard (200 held-out matches): 50 +1.46, 100 +1.67, 150 +0.89, 200 +2.41, 
 Defending then outweighed the CPU's attack (default against old Hard: 0.5 goals a match, 25 draws in 40), so Hard was retuned again (`tuning/search-5v5-v3.json`): +0.97 against the default (129 wins, 7 losses) and +0.50 against the previous settings over 200 held-out seeds, about 1 goal a match. Gen30 against the new Hard (60 matches): W9 D9 L42, goals 1.0 against 2.5, 3 passes against 22. The CPU is now the opponent that punishes solo dribbling; the next generation should train against it.
 
 **Generation 32 (`role_gen32`, continued as `role_gen32b`), promoted.** Init gen30@200 with gen30's recipe, against the version 5 CPUs (new Hard x3, default, and the two previous Hard settings as extra CPUs), anchors gen30, gen29@800, gen29@200, gen21 and gen19; 400 iterations, then 600 more from iteration 400. Against the new Hard (60 matches) the goal difference rose from -1.40 at 50 to -0.54 at 400 and then held between -0.36 and -1.07; passes stayed at 3 to 4 a match throughout. On 200 held-out matches against the new Hard: gen32@500 (role_gen32b iteration 100) -0.45 +/-0.30, gen32@1000 -0.58, gen30 -1.32. Head to head with gen30 (128 matches): gen32@500 +0.27 +/-0.38, gen32@700 -1.15, gen32@1000 0.00. Gen32@500 is now `models/trained-5v5.json` and `models/anchors/gen32-role_gen32.json`. PPO adapted the dribbling to goal-side defending but never found passing; next is a short DAgger round with the new Hard (about 22 passes a match) as teacher, then league PPO.
+
+**Passing by imitation, then league PPO (`dagger_gen32`, `role_gen33`), not promoted.** `python/dagger.py` can now fine-tune an existing policy (`--demos none --init ... --initial-epochs 0`); a policy with a keeper network keeps it and only the outfield network learns, from the outfield players' rows. Four rounds from gen32@500 with the new Hard as teacher (600-step rollouts, 2 epochs, lr 1e-4, beta0 0.25) taught passing at once: 41 passes a match (27 completed) against the new Hard, where gen32 makes 4. Play collapsed with it (20 losses in 20, 0 against 5.7 goals, 0.6 shots). Gen33, 300 league PPO iterations from there with gen32's recipe, won strength back and dropped the passing as it did (60 matches against the new Hard each):
+
+| Checkpoint | W/D/L | Goal difference | Passes completed / attempted |
+| --- | --- | --- | --- |
+| 50 | 1/7/52 | -2.43 | 12.3 / 18.7 |
+| 100 | 4/6/50 | -2.05 | 8.8 / 12.4 |
+| 150 | 9/11/40 | -1.38 | 5.9 / 8.8 |
+| 200 | 4/12/44 | -1.57 | 5.1 / 7.3 |
+| 250 | 8/9/43 | -1.56 | 4.5 / 6.3 |
+| 300 | 8/15/37 | -0.97 | 4.0 / 6.1 |
+
+So the policy can pass, but under PPO its own passing is worth less than its dribbling (its passes were about 66% complete, and each failed one gives the ball away). Gen32@500 stays the shipped model.
+
+## Where things stand and what to do next (2026-11-19)
+
+**State.** Shipped model: gen32@500 (`models/trained-5v5.json`, anchor `gen32-role_gen32.json`): -0.45 against the new Hard, level with or slightly ahead of gen30 head to head, about 3 to 4 passes a match. CPUs: baseline version 5 (goal-side defending, kickoff to the nearest teammate) with Hard retuned on it (`tuning/search-5v5-v3.json`); the new Hard beats every model and completes about 22 passes a match. The web app shows the trained model's name and full-time statistics with a JSON copy (`src/runners/match-stats.ts`).
+
+**Files kept only on this machine** (`runs/`, `tuning/` and `demos/` are git-ignored): checkpoints in `runs/role_gen29` to `runs/role_gen33` and `runs/dagger_gen32`; the CPU searches `tuning/search-5v5-v2.json` (previous Hard) and `tuning/search-5v5-v3.json` (current Hard), and `tuning/hard.json` (the Hard before those), the last two older ones used as extra league CPUs; failure replays `demos/failures_gen29.json`. Exported gen31 to gen33 checkpoints were only in `/tmp`; re-export with `python/export_policy.py runs/<run>/iter_NNNN.pt <out>.json`.
+
+**Open question: why passing does not pay for the learner.** Either passing is truly worse in this engine (passes too easy to intercept, a firm pass too hard to control, or dribbling still too easy, which would be a realism problem), or the learner's passing is poor (receivers do not get open, passes are mistimed, one network moves all four outfield players without coordinating). They need different fixes.
+
+**Suggested next steps, in order.**
+
+1. *Measure the value of a pass against a dribble* (about 15 minutes, no training). For the new Hard, gen32 and the imitation model (`runs/dagger_gen32/latest.pt`), count per action how often it ends in a turnover, how often it leads to a shot within 5 s, and the ground it gains. The match statistics recorder and the probes in this session (`stats-pair`, `shotmap`, `kickoff-trace`) are the starting point; worth adding as a script under `scripts/`.
+2. *If passing is worse in the engine:* fix the engine, then retune the CPU. Look at interception reach and timing, first-touch control of firm passes, and how easily a dribbler beats a goal-side defender.
+3. *If the learner's passing is the problem:* keep the imitated passing while PPO improves it. Add a penalty in `train_ppo.py` on the policy drifting from the imitation policy's act head (a KL term with a weight annealed toward 0), start from `runs/dagger_gen32/latest.pt` or a milder DAgger run (1 or 2 rounds, lower lr), and judge by passes a match and the record against the new Hard together. Off-ball movement may also need a reward for getting open or a receiver drill.
+4. *Smaller items still open:* the keeper is rarely tested (save-rate check in the keeper drill, then the deferred reaction time of 0.07 s against about 0.2 s); the CPU still never takes first-time shots; fouls, free kicks and penalties do not exist.
+
+**Evaluation habits that worked.** Screen every checkpoint (every 50 iterations) against the new Hard over 60 matches with passes recorded, confirm the best on 200 held-out matches, and play the head to head against the shipped model on two seed sets. Long league runs drift (gen29), and the best checkpoint is often early.
