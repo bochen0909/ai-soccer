@@ -12,6 +12,8 @@ import { createDrill } from "../training/drills.js";
 import type { DrillKind } from "../training/drills.js";
 import { FixedStepClock } from "./fixed-step.js";
 import { KeyboardControls } from "./keyboard.js";
+import { MatchStatsRecorder } from "./match-stats.js";
+import type { MatchReport, TeamLabel } from "./match-stats.js";
 
 function element<T extends HTMLElement>(id: string): T {
   const target = document.getElementById(id);
@@ -47,6 +49,10 @@ const awayTag = element("away-tag");
 const playerCard = element("player-card");
 const controlsPanel = element("controls");
 const pitch = element<HTMLCanvasElement>("pitch");
+const modelInfo = element("model-info");
+const gateStats = element("gate-stats");
+const statsBody = element("stats-body");
+const copyStats = element<HTMLButtonElement>("copy-stats");
 
 let config = matchFormat.value === "full" ? createElevenAsideConfig() : createArcadeConfig();
 config.rules.directionalKickoff = true;
@@ -55,6 +61,8 @@ const input = new KeyboardControls(surface, window, (detail) => showActionFeedba
 let renderer = new PitchRenderer(pitch, config);
 const registry = createDefaultAIRegistry();
 let trainedReady = false;
+/** Name of the trained network, from the run and iteration its file was exported from. */
+let trainedModel: string | undefined;
 try {
   // The trained policy is a 600 KB file. Without it the page still works, just without the Trained option.
   // Add ?model=candidates/role_gen13 (or anchors/gen12-role_gen12) to the address to play against another policy.
@@ -63,12 +71,17 @@ try {
     ? `/models/${requested}.json` : "/models/trained-5v5.json";
   const response = await fetch(path);
   if (response.ok) {
-    registerNeuralPolicy(registry, (await response.json()) as PolicyWeights);
+    const weights = (await response.json()) as PolicyWeights & { source?: string; iteration?: number };
+    registerNeuralPolicy(registry, weights);
     trainedReady = true;
+    const name = weights.source ?? path.replace(/^\/models\//, "").replace(/\.json$/, "");
+    trainedModel = weights.iteration !== undefined ? `${name}@${weights.iteration}` : name;
   }
 } catch (error) {
   console.warn("Trained policy unavailable", error);
 }
+modelInfo.replaceChildren(...(trainedModel === undefined ? ["Trained model: unavailable"]
+  : ["Trained model: ", Object.assign(document.createElement("strong"), { textContent: trainedModel })]));
 const session = new MatchSession(registry);
 const names = ["N. Kova", "M. Silva", "D. Reyes", "T. Moss", "A. Vega"];
 const fullNames = ["N. Kova", "M. Silva", "D. Reyes", "I. Okafor", "R. Malik", "T. Moss",
@@ -84,6 +97,8 @@ function activeDrill(): DrillKind | undefined {
 }
 const DRILL_MAX_TICKS = 900;
 let drillStartTick = 0;
+let stats: MatchStatsRecorder;
+let report: MatchReport | undefined;
 
 const requestedDrill = new URLSearchParams(location.search).get("drill");
 if (requestedDrill !== null && Array.from(drillSelect.options).some((option) => option.value === requestedDrill)) {
@@ -113,6 +128,14 @@ function resetSession(): void {
   const scenario = drill === undefined ? undefined : createDrill(drill, config, 0, seed);
   session.reset(config, seed, humanControlled() ? { human: { teamId, playerId: taker.id }, teams } : { teams }, scenario);
   drillStartTick = session.snapshot().tick;
+  stats = new MatchStatsRecorder(config, seed, [teamLabel("Ember FC", homeControl), teamLabel("Tidal FC", awayControl)],
+    matchFormat.selectedOptions[0]?.textContent ?? matchFormat.value);
+}
+
+function teamLabel(name: string, select: HTMLSelectElement): TeamLabel {
+  const control = select === homeControl && humanControlled() ? "You"
+    : select.selectedOptions[0]?.textContent?.replace(/^\w+ · /, "") ?? select.value;
+  return select.value === "trained" && trainedModel !== undefined ? { name, control, model: trainedModel } : { name, control };
 }
 
 /** Tuned profiles only apply to formats they were tuned for. Falls back to the default profile otherwise. */
@@ -165,7 +188,11 @@ function showActionFeedback(detail: string, tick: number): void {
   actionMessageUntil = tick + 78;
 }
 
-function showGate(title: string, detail: string, action: string): void {
+function showGate(title: string, detail: string, action: string, summary?: MatchReport): void {
+  gateStats.hidden = summary === undefined;
+  copyStats.hidden = summary === undefined;
+  copyStats.textContent = "Copy stats (JSON)";
+  if (summary !== undefined) paintStats(summary);
   gateTitle.textContent = title;
   gateCopy.textContent = detail;
   gateAction.textContent = action;
@@ -230,7 +257,52 @@ function finish(snapshot: SessionSnapshot): void {
     return;
   }
   const result = home === away ? "Draw" : home > away ? "Ember FC wins" : "Tidal FC wins";
-  showGate("Full time", `${result} · ${home}–${away}`, "Play again");
+  report = stats.report(snapshot.score);
+  showGate("Full time", `${result} · ${home}–${away}`, "Play again", report);
+}
+
+const percent = (share: number | null): string => share === null ? "–" : `${Math.round(share * 100)}%`;
+
+/** Fills the full-time table: one row per statistic, Ember on the left and Tidal on the right. */
+function paintStats(summary: MatchReport): void {
+  const [home, away] = summary.teams;
+  element("stats-home").textContent = home.model ? `Ember · ${home.model}` : `Ember · ${home.control}`;
+  element("stats-away").textContent = away.model ? `Tidal · ${away.model}` : `Tidal · ${away.control}`;
+  const rows: [string, (team: typeof home) => string][] = [
+    ["Goals", (team) => String(team.stats.goals)],
+    ["Shots (on target)", (team) => `${team.stats.shots} (${team.stats.shotsOnTarget})`],
+    ["Possession", (team) => percent(team.stats.possession)],
+    ["Passes completed", (team) => `${team.stats.passesCompleted}/${team.stats.passes}`],
+    ["Pass accuracy", (team) => percent(team.stats.passAccuracy)],
+    ["Tackles won", (team) => `${team.stats.tacklesWon}/${team.stats.tackles}`],
+    ["Saves", (team) => String(team.stats.saves)],
+    ["Corners", (team) => String(team.stats.corners)],
+    ["Throw-ins", (team) => String(team.stats.throwIns)],
+    ["Distance run", (team) => `${(team.stats.distanceM / 1000).toFixed(2)} km`],
+  ];
+  statsBody.replaceChildren(...rows.map(([label, value]) => {
+    const row = document.createElement("tr");
+    for (const text of [value(home), label, value(away)]) {
+      row.append(Object.assign(document.createElement("td"), { textContent: text }));
+    }
+    return row;
+  }));
+}
+
+async function copyReport(): Promise<void> {
+  if (report === undefined) return;
+  const text = JSON.stringify(report, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Clipboard access can be refused (no secure context or permission); fall back to a hidden text area.
+    const area = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.append(area);
+    area.select();
+    document.execCommand("copy");
+    area.remove();
+  }
+  copyStats.textContent = "Copied ✓";
 }
 
 function receive(events: readonly MatchEvent[]): void {
@@ -314,6 +386,7 @@ function draw(now: number): void {
         const command: HumanInput = humanControlled() ? input.sample(previous, config) : {};
         const result = session.step(command);
         const snapshot = session.snapshot();
+        stats.record(result, snapshot);
         if (command.request && snapshot.selectedPlayerId) {
           const playerId = snapshot.selectedPlayerId;
           const submitted = result.frame.actions.find((action) => action.playerId === playerId)?.request;
@@ -364,6 +437,7 @@ function draw(now: number): void {
 }
 
 gateAction.addEventListener("click", () => mode === "finished" || mode === "error" ? restart() : start());
+copyStats.addEventListener("click", () => void copyReport());
 matchFormat.addEventListener("change", () => {
   config = matchFormat.value === "full" ? createElevenAsideConfig() : createArcadeConfig();
   config.rules.directionalKickoff = true;

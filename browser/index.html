@@ -22,7 +22,10 @@
 
   <main class="match">
     <div class="match-heading">
-      <h1 id="match-title">Quick Match</h1>
+      <div class="match-title">
+        <h1 id="match-title">Quick Match</h1>
+        <p id="model-info" class="model-info">Trained model: loading…</p>
+      </div>
       <div class="match-options">
         <select id="match-format" class="tool" aria-label="Match format">
           <option value="quick">5-a-side · 2 min</option>
@@ -76,7 +79,14 @@
         <div class="gate-card">
           <h2 id="gate-title">Ready for kickoff?</h2>
           <p id="gate-copy">Take control of Ember FC.</p>
-          <button type="button" id="gate-action" class="primary">Kick off <span aria-hidden="true">↗</span></button>
+          <table id="gate-stats" class="match-stats" hidden>
+            <thead><tr><th scope="col" id="stats-home">Ember</th><th scope="col"></th><th scope="col" id="stats-away">Tidal</th></tr></thead>
+            <tbody id="stats-body"></tbody>
+          </table>
+          <div class="gate-actions">
+            <button type="button" id="copy-stats" class="tool" hidden>Copy stats (JSON)</button>
+            <button type="button" id="gate-action" class="primary">Kick off <span aria-hidden="true">↗</span></button>
+          </div>
         </div>
       </div>
       <div class="player-card" id="player-card">
