@@ -25,9 +25,9 @@ export interface AIProfile {
  *
  * "trained" is a neural network trained by imitating the tuned profile (with team-role features), correcting with DAgger and
  * fine-tuning with PPO (see python/ and AI_TRAINING_PLAN.md). It runs as the "neural" plugin, which must be registered with the
- * weights in models/trained-5v5.json first. The shipped model is gen30 (fine-tuned from gen29 on the reworked engine):
- * over 200 held-out 5-a-side matches it scores +2.9 goals per match against the default profile and +2.4 against the
- * tuned one, and it is level with or ahead of every earlier model head to head (see the plan).
+ * weights in models/trained-5v5.json first. The shipped model is gen32 (gen30 trained on against the CPUs that defend
+ * a dribbler): over 200 held-out 5-a-side matches it loses to the tuned profile by 0.45 goals per match (gen30 by
+ * 1.32) and it is level with or slightly ahead of gen30 head to head (see the plan).
  */
 export const AI_PROFILES: Readonly<Record<AIProfileId, AIProfile>> = {
   default: { id: "default", label: "Default", tunedFor: "any", config: {} },
