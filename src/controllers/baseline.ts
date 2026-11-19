@@ -545,7 +545,10 @@ export interface RoleInfo {
   };
 }
 
-/** Settings of the "tuned" profile, which is the teacher the role features describe. */
+/**
+ * Settings the role features describe: the "tuned" profile as it was when the learners were trained. Kept fixed when
+ * that profile is retuned, so the role block of the observation means the same thing to existing policies.
+ */
 const ROLE_CONFIG = {
   aggression: 0.955, riskTolerance: 0.616, awareness: 0.764,
   passLane: 0.328, passSpace: 0.512, passProgress: 2.815, passRange: 1.099,
