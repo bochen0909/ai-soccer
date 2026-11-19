@@ -130,7 +130,8 @@ function passingOption(tactics: Tactics, passer: PlayerState, origin: Vec2, maxR
     const ballFromTaker = difference(passer.position, origin);
     const aim = direction(origin, target, tactics.attack);
     const phase = tactics.world.phase.kind;
-    const canPassBack = tactics.fullSide && phase === "kickoffSetup" && tactics.world.directionalKickoff;
+    // A directional kickoff lets the taker step aside, so the kickoff can go back to a teammate.
+    const canPassBack = phase === "kickoffSetup" && tactics.world.directionalKickoff === true;
     if (phase !== "live" && !canPassBack &&
         ballFromTaker.x * aim.x + ballFromTaker.y * aim.y < -0.05) continue;
     const space = nearestDistance(target, tactics.opponents, 5);
@@ -163,6 +164,21 @@ export function passingPower(range: number, speedLimit: number, ball: BallConfig
   return clamp(rollLaunchSpeed(range, arrival, ball) / speedLimit, 0.18, 1);
 }
 
+/**
+ * A kickoff with no scored pass goes to the nearest outfield teammate, keeping the ball rather than playing it blind
+ * into the opponents' half.
+ */
+function nearestTeammate(tactics: Tactics, passer: PlayerState, origin: Vec2): PassOption | undefined {
+  let best: PassOption | undefined;
+  for (const receiver of tactics.teammates) {
+    if (receiver.playerId === passer.playerId || receiver.definition.role === "goalkeeper") continue;
+    const target = onPitch(tactics, receiver.position);
+    const range = distance(origin, target);
+    if (range >= 2 && (!best || range < best.range)) best = { receiverId: receiver.playerId, target, range, score: 0 };
+  }
+  return best;
+}
+
 function restart(tactics: Tactics, player: PlayerState): PlayerIntent {
   const { phase, tick, ball } = tactics.world;
   const intent = idle(player);
@@ -170,8 +186,9 @@ function restart(tactics: Tactics, player: PlayerState): PlayerIntent {
       player.action || tick < phase.readyTick || tick >= phase.deadlineTick) return intent;
   const kind = phase.kind === "restartSetup" ? phase.restart : "kickoff";
   const physical = player.definition.abilities.physical;
-  const option = passingOption(tactics, player, ball.position, kind === "throwIn" ? 13 : 17);
-  const target = option?.target ?? (kind === "kickoff" ? { x: 6 * tactics.attack, y: 2 } : { x: 0, y: 0 });
+  const option = passingOption(tactics, player, ball.position, kind === "throwIn" ? 13 : 17) ??
+    (kind === "kickoff" ? nearestTeammate(tactics, player, ball.position) : undefined);
+  const target = option?.target ?? { x: 0, y: 0 };
   const aim = direction(ball.position, target, tactics.attack);
   if (kind === "throwIn") {
     return { ...intent, request: {
@@ -416,10 +433,43 @@ function passingRun(tactics: Tactics, player: PlayerState, intention: PassIntent
   return move(player, target, distance(player.position, target) > 4);
 }
 
+/** How far goal-side of the ball the chaser stands while an opponent dribbles. */
+const JOCKEY_M = 1.2;
+/** How far behind the chaser, toward goal, the covering defender waits. */
+const COVER_M = 5;
+/** How far ahead along the dribbler's run the chaser and the cover aim, in seconds: they retreat in front of a fast dribble. */
+const JOCKEY_LEAD_S = 0.6;
+const COVER_LEAD_S = 0.8;
+/** Ball farther than this from the dribbler's centre is a heavy touch worth going in for. */
+const LOOSE_BALL_M = 0.7;
+
+/** Unit vector from the ball toward the centre of the team's own goal. */
+function towardOwnGoal(tactics: Tactics): Vec2 {
+  const { ball, pitch } = tactics.world;
+  const goal = { x: -tactics.attack * pitch.lengthM / 2, y: 0 };
+  const offset = difference(ball.position, goal);
+  const range = Math.max(1e-6, length(offset));
+  return { x: offset.x / range, y: offset.y / range };
+}
+
+/**
+ * Whether a tackle on a dribbler is worth the risk: the ball is out from the dribbler's feet, or the defender is not
+ * reaching around the dribbler's body for it. A missed tackle leaves the defender beaten and off balance.
+ */
+function goodTackle(defender: PlayerState, owner: PlayerState, ball: Vec2): boolean {
+  const fromOwner = difference(owner.position, ball);
+  const away = length(fromOwner);
+  if (away > LOOSE_BALL_M) return true;
+  const toOwner = difference(defender.position, owner.position);
+  const apart = Math.max(1e-6, length(toOwner));
+  const shielded = (fromOwner.x * toOwner.x + fromOwner.y * toOwner.y) / (Math.max(1e-6, away) * apart);
+  return shielded < 0.3;
+}
+
 /** Deterministic formation tactics with one pressing or chasing outfield player. */
 export class BaselineTeamAI implements TeamAI {
   readonly id = "baseline";
-  readonly version = "4";
+  readonly version = "5";
   private teamIndex: 0 | 1 = 0;
   private traits: Traits = defaults;
   private weights: Weights = DEFAULT_WEIGHTS;
@@ -482,9 +532,21 @@ export class BaselineTeamAI implements TeamAI {
 
     const marks = tactics.opponents.filter((player) => player.definition.role === "outfield" && player.playerId !== ownerId);
     const markerById = new Map<PlayerId, PlayerState>();
+    // Against a dribbler the chaser stays goal-side and a second defender covers behind, on the way to goal.
+    const dribbler = mode === "defend" && ball.control.kind === "dribble" ? owner : undefined;
+    const toGoal = towardOwnGoal(tactics);
+    const ahead = (seconds: number, metres: number): Vec2 => onPitch(tactics, {
+      x: ball.position.x + ball.velocity.x * seconds + toGoal.x * metres,
+      y: ball.position.y + ball.velocity.y * seconds + toGoal.y * metres,
+    });
+    const coverSpot = ahead(COVER_LEAD_S, COVER_M);
+    const cover = dribbler === undefined ? undefined : outfield
+      .filter((player) => player.playerId !== this.chaser)
+      .reduce<PlayerState | undefined>((best, player) =>
+        !best || distance(player.position, coverSpot) < distance(best.position, coverSpot) ? player : best, undefined);
     if (mode === "defend") {
       for (const defender of outfield) {
-        if (defender.playerId === this.chaser || marks.length === 0) continue;
+        if (defender.playerId === this.chaser || defender === cover || marks.length === 0) continue;
         const anchor = formation(tactics, defender, mode);
         let closest = 0;
         for (let i = 1; i < marks.length; i += 1) {
@@ -497,6 +559,13 @@ export class BaselineTeamAI implements TeamAI {
       if (ownerId === player.playerId && ball.control.kind === "dribble") return carrying(tactics, player);
       if (intention?.receiverId === player.playerId) return passingRun(tactics, player, intention);
       if (player.definition.role === "goalkeeper") return goalkeeper(tactics, player);
+      if (primary?.player.playerId === player.playerId && dribbler !== undefined) {
+        const goalSide = ahead(JOCKEY_LEAD_S, JOCKEY_M);
+        const jockey = move(player, goalSide, distance(player.position, goalSide) > 2);
+        const aim = !player.action && goodTackle(player, dribbler, ball.position) ? tackleAim(tactics.world, player) : undefined;
+        return aim ? { ...jockey, request: { kind: "tackle", direction: aim } } : jockey;
+      }
+      if (player === cover) return move(player, coverSpot, distance(player.position, coverSpot) > 3);
       if (primary?.player.playerId === player.playerId) {
         const range = distance(player.position, ball.position);
         const chase = move(player, primary.target, range > 3.5 - this.traits.aggression);

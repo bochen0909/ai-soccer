@@ -17,11 +17,11 @@ export interface AIProfile {
  * Named ways to run a computer team.
  *
  * "tuned" is the baseline AI with settings from `npm run tune -- search` on 5-a-side matches against the
- * default profile, retuned after the engine gained first-time kicks, pace-based stamina and collision balance
- * (tuning/search-5v5-v2.json). On 200 held-out seeds it beats the default profile by +4.3 goals per match (196 wins) and the
- * previous tuned settings by +2.1 (159 wins, 28 losses). It presses less than before, keeps the ball until an
- * opponent is close, plays short passes through clear lanes and shoots only from close in. It has not been tuned or
- * checked for 11-a-side.
+ * default profile, retuned after the baseline learned to defend a dribbler (goal-side chaser, cover, no tackles into
+ * a shielded ball) and to keep the ball at kickoff (tuning/search-5v5-v3.json). Defending is now much stronger, so
+ * games score less: on 200 held-out seeds it beats the default profile by +0.97 goals per match (129 wins, 7 losses)
+ * and the previous tuned settings by +0.50. It dribbles further before passing and holds the ball until an opponent
+ * is close. It has not been tuned or checked for 11-a-side.
  *
  * "trained" is a neural network trained by imitating the tuned profile (with team-role features), correcting with DAgger and
  * fine-tuning with PPO (see python/ and AI_TRAINING_PLAN.md). It runs as the "neural" plugin, which must be registered with the
@@ -36,9 +36,9 @@ export const AI_PROFILES: Readonly<Record<AIProfileId, AIProfile>> = {
     label: "Hard",
     tunedFor: [5],
     config: {
-      aggression: 0.637, riskTolerance: 0.732, awareness: 0.769,
-      passLane: 2.706, passSpace: 0.490, passProgress: 1.360, passRange: 0.504,
-      shotRange: 0.340, dribbleAhead: 0.482, pressureRadius: 0.297,
+      aggression: 0.571, riskTolerance: 0.453, awareness: 0.431,
+      passLane: 0.492, passSpace: 0.434, passProgress: 1.119, passRange: 1.280,
+      shotRange: 0.986, dribbleAhead: 2.103, pressureRadius: 0.265,
     },
   },
   trained: { id: "trained", label: "Trained", tunedFor: [5], plugin: "neural", config: {} },
