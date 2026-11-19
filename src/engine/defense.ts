@@ -1,7 +1,7 @@
 import type { ActionRequest, PlayerState, Vec3 } from "../contracts/index.js";
 import { executionFactors, footQuality } from "./abilities.js";
 import { dispossessChance } from "./ball-control.js";
-import { DIVE_REACH_M, keeperDiveExtension, keeperSaveTiming, keeperSaveVolumes } from "./keeper-save.js";
+import { DIVE_REACH_M, keeperDiveExtension, keeperSaveTiming, keeperSaveVolumes, saveStrain } from "./keeper-save.js";
 import { along, capsuleDistanceSquared, sweepCapsule } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
 import { attackDirection, keeperHoldPosition } from "./reset.js";
@@ -22,11 +22,17 @@ export function defenseTiming(player: PlayerState, request: DefenseRequest) {
   return keeperSaveTiming(player.definition.abilities.technical.goalkeeping);
 }
 
-function tackleVolume(state: EngineState, player: PlayerState, request: DefenseRequest): Capsule {
+/** How far a standing tackle's lunge reaches, from the tackler's centre to the ball's centre, when fresh and on the strong foot. */
+export function tackleReachM(player: PlayerState): number {
   const { physical, technical } = player.definition.abilities;
+  return physical.reachM * (0.95 + 0.2 * technical.tackling);
+}
+
+function tackleVolume(state: EngineState, player: PlayerState, request: DefenseRequest): Capsule {
   const { exertion } = executionFactors(state, player);
   const foot = footQuality(player, state.ball.position);
-  const reach = physical.reachM * (0.72 + 0.28 * technical.tackling) * (0.85 + 0.15 * exertion * foot);
+  // A tackle is a lunge, so it reaches past the standing reach; fatigue and the weaker foot shorten it.
+  const reach = tackleReachM(player) * (0.85 + 0.15 * exertion * foot);
   // This volume tests the ball center, so its far edge is also the control limit.
   const radiusM = Math.min(player.definition.radiusM * 0.6, reach * 0.28);
   const footCenter = (distance: number): Vec3 => ({
@@ -67,6 +73,16 @@ export function saveExtension(state: EngineState, activeTick: number): number {
   return keeperDiveExtension(state.tick - activeTick);
 }
 
+/**
+ * The back-pass rule: a ball a teammate deliberately kicked or threw to the keeper cannot be handled, so a save does
+ * not touch it and the keeper plays it with their feet. Deflections end the flight and are fair to handle.
+ */
+export function isBackPass(state: EngineState, keeper: PlayerState): boolean {
+  const flight = state.ball.flightAction;
+  if (!flight || flight.playerId === keeper.playerId) return false;
+  return state.players.some((player) => player.playerId === flight.playerId && player.teamId === keeper.teamId);
+}
+
 export function defenseCandidate(
   state: EngineState, player: PlayerState, request: DefenseRequest, duration: number, activeTick: number,
 ): { time: number } | undefined {
@@ -79,16 +95,16 @@ export function defenseCandidate(
   const ballRadius = state.config.ball.radiusM;
   let volumes: Capsule[];
   let sweepRadius = 0;
+  const teammateHasIt = control.kind === "dribble" &&
+    players.some((owner) => owner.playerId === control.playerId && owner.teamId === player.teamId);
+  if (teammateHasIt) return undefined;
   if (request.kind === "keeperSave") {
+    if (isBackPass(state, player)) return undefined;
     if (player.definition.role !== "goalkeeper" || !saveInterval(state, player, times)) return undefined;
     volumes = keeperSaveVolumes(player, request.direction, state.config.tuning.keeperReachScale,
       saveExtension(state, activeTick));
     sweepRadius = ballRadius;
   } else {
-    if (control.kind === "dribble" &&
-      players.some((owner) => owner.playerId === control.playerId && owner.teamId === player.teamId)) {
-      return undefined;
-    }
     // Standing tackles can only contact a ball low enough to be put under foot control.
     const top = ballRadius + player.definition.radiusM;
     if (!clipAxis(times, ball.position.z, ball.velocity.z, ballRadius, top)) return undefined;
@@ -153,9 +169,11 @@ export function resolveDefense(
     ball.velocity.x - player.velocity.x, ball.velocity.y - player.velocity.y, ball.velocity.z,
   );
   // A ball met at full stretch is mostly parried; one within standing reach is as easy to hold as before.
+  // Across or behind the body it is hard to hold at all.
   const away = Math.hypot(ball.position.x - player.position.x, ball.position.y - player.position.y);
   const stretch = 1 - 0.45 * Math.max(0, Math.min(1, (away - player.definition.abilities.physical.reachM) / DIVE_REACH_M));
-  const catchLimit = (6 + 14 * skill) * exertion * movement * pressure * stretch;
+  const strain = saveStrain(player, request.direction);
+  const catchLimit = (6 + 14 * skill) * exertion * movement * pressure * stretch * (1 - 0.7 * strain);
   state.nextDribbleTouchTick = state.tick;
   if (relativeSpeed <= catchLimit) {
     ball.position = keeperHoldPosition(player, state.config.ball.radiusM, state.config.pitch);
@@ -166,8 +184,13 @@ export function resolveDefense(
     return "caught";
   }
 
-  // Direct a parry into the field, with a lateral component from the reach direction.
-  const direction = { x: attackDirection(state, player.teamId), y: 0.8 * request.direction.y, z: 0.14 };
+  // A save at the body blocks the ball back out; a diving save pushes it wide on the side of the dive, as keepers do,
+  // rather than back into the middle. A ball met out by a post is turned around it, behind for a corner.
+  const forward = attackDirection(state, player.teamId);
+  const lateral = Math.abs(request.direction.y);
+  const side = Math.sign(request.direction.y) || Math.sign(ball.velocity.y) || 1;
+  const wide = Math.min(1, Math.abs(ball.position.y) / (state.config.pitch.goalWidthM / 2));
+  const direction = { x: forward * (1 - 0.6 * lateral - 0.7 * lateral * wide), y: side * (0.3 + lateral), z: 0.2 };
   const speed = Math.min(maxBallSpeed, 2 + relativeSpeed * (0.44 - 0.12 * skill));
   const scale = speed / Math.hypot(direction.x, direction.y, direction.z);
   ball.velocity = { x: direction.x * scale, y: direction.y * scale, z: direction.z * scale };

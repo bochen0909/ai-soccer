@@ -5,6 +5,8 @@ import {
 import type { ActionSpace } from "./contracts.js";
 import type { AgentContext } from "./actions.js";
 import { toPolicy } from "./geometry.js";
+import { ballOf, FIRM_PASS_ARRIVAL_MPS, SOFT_PASS_ARRIVAL_MPS } from "../controllers/baseline.js";
+import { rollSpeedAfter } from "../engine/ball-flight.js";
 
 export interface Choice {
   move: number;
@@ -78,8 +80,18 @@ export function intentToChoice(
       case "throwIn":
       case "keeperRelease": {
         const loft = request.kind === "kick" && request.kickType === "loft";
-        const base = loft ? space.loftBase : space.passBase;
+        let base = loft ? space.loftBase : space.passBase;
         const slot = targetSlot(intent, context, request.direction, (candidate) => mask[base + candidate] === 1);
+        if (slot >= 0 && request.kind === "kick" && request.kickType === "pass" && mask[space.softBase + slot] === 1) {
+          // A ground pass that would arrive nearer the soft pace than the firm one is the soft act.
+          const { observation, ego } = context;
+          const mate = context.team[slot]!;
+          const range = Math.hypot(mate.position.x - observation.ball.position.x, mate.position.y - observation.ball.position.y);
+          const speed = request.power * ego.definition.abilities.physical.maxKickSpeedMps * 0.55;
+          if (rollSpeedAfter(speed, range, ballOf(observation)) < (FIRM_PASS_ARRIVAL_MPS + SOFT_PASS_ARRIVAL_MPS) / 2) {
+            base = space.softBase;
+          }
+        }
         if (slot >= 0) act = base + slot;
         break;
       }

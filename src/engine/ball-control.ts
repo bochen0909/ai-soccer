@@ -1,7 +1,7 @@
 import type { PlayerAction, PlayerId, PlayerState, Vec2, Vec3 } from "../contracts/index.js";
 import type { ActionSlots, EventData } from "./actions.js";
 import { executionFactors, footQuality } from "./abilities.js";
-import { sphereContactTime } from "./physics-geometry.js";
+import { capsuleDistanceSquared, playerCapsule, sphereContactTime } from "./physics-geometry.js";
 import { randomUnit } from "./random.js";
 import { controlHeight, inDribbleReach } from "./reset.js";
 import type { EngineState } from "./reset.js";
@@ -24,8 +24,9 @@ export function dribblePocket(player: PlayerState, ballRadiusM: number): number 
 }
 
 /**
- * Chance that `challenger` takes the ball from `owner`'s dribble. Tackling skill against dribbling skill, and a heavy
- * touch (the ball out beyond the owner's pocket) makes it much easier. `base` is the even-skill chance at the pocket.
+ * Chance that `challenger` takes the ball from `owner`'s dribble. Tackling skill against dribbling skill; a heavy
+ * touch (the ball out beyond the owner's pocket) makes it much easier, and a shielded ball (the owner's body between
+ * the challenger and the ball) much harder. `base` is the even-skill chance at the pocket, side on.
  */
 export function dispossessChance(state: EngineState, challenger: PlayerState, owner: PlayerState, base: number): number {
   const { ball } = state;
@@ -37,7 +38,12 @@ export function dispossessChance(state: EngineState, challenger: PlayerState, ow
   const reach = owner.definition.abilities.physical.reachM;
   const away = Math.hypot(ball.position.x - owner.position.x, ball.position.y - owner.position.y);
   const loose = clamp((away - pocket) / Math.max(CONTROL_EPSILON, reach - pocket), 0, 1);
-  return clamp(base + 0.45 * tackle - 0.4 * dribble + 0.5 * loose, 0, 1);
+  const fromChallenger = { x: owner.position.x - challenger.position.x, y: owner.position.y - challenger.position.y };
+  const apart = Math.hypot(fromChallenger.x, fromChallenger.y);
+  const shielded = apart > CONTROL_EPSILON && away > CONTROL_EPSILON
+    ? clamp(((ball.position.x - owner.position.x) * fromChallenger.x + (ball.position.y - owner.position.y) * fromChallenger.y) /
+      (away * apart), 0, 1) : 0;
+  return clamp(base + 0.45 * tackle - 0.4 * dribble + 0.5 * loose - 0.4 * shielded, 0, 1);
 }
 
 function rotate(direction: Vec2, angle: number): Vec2 {
@@ -60,7 +66,8 @@ export function firstTouchCandidate(
   state: EngineState, player: PlayerState, action: PlayerAction | undefined, duration: number,
 ): { time: number; player: PlayerState } | undefined {
   const { ball, tick, touchExclusion } = state;
-  if (ball.control.kind !== "free" ||
+  // A ball that just squirted out from between two players is clear of both for a moment.
+  if (ball.control.kind !== "free" || (state.bodyClearUntilTick[player.playerId] ?? 0) > tick ||
       (touchExclusion?.playerId === player.playerId && tick < touchExclusion.untilTick)) return undefined;
 
   const ballRadius = state.config.ball.radiusM;
@@ -278,5 +285,47 @@ export function resolveBodyContact(
     }
   }
   shield(state, player, normal, events);
+  return true;
+}
+
+/** Ticks the ball passes through both bodies after squirting out from between them. */
+const SQUIRT_CLEAR_TICKS = 6;
+const SQUIRT_MIN_SPEED_MPS = 3;
+
+/**
+ * A ball pinched between two bodies cannot stay there: it squirts out sideways and is loose. Without this the two
+ * soft contacts trade the ball back and forth in zero time. Returns false when no other body is against the ball.
+ */
+export function resolvePinch(state: EngineState, player: PlayerState, events: EventData[]): boolean {
+  const { ball } = state;
+  const ballRadius = state.config.ball.radiusM;
+  const other = state.players.find((candidate) => candidate !== player &&
+    (state.bodyClearUntilTick[candidate.playerId] ?? 0) <= state.tick &&
+    capsuleDistanceSquared(ball.position, playerCapsule(candidate)) <= (candidate.definition.radiusM + ballRadius + 0.01) ** 2);
+  if (!other) return false;
+  const dx = other.position.x - player.position.x, dy = other.position.y - player.position.y;
+  const gap = Math.hypot(dx, dy) || 1;
+  const line = { x: dx / gap, y: dy / gap };
+  const across = { x: -line.y, y: line.x };
+  const mid = { x: (player.position.x + other.position.x) / 2, y: (player.position.y + other.position.y) / 2 };
+  const offset = (ball.position.x - mid.x) * across.x + (ball.position.y - mid.y) * across.y;
+  const side = Math.abs(offset) > 1e-3 ? Math.sign(offset) : randomUnit(state) < 0.5 ? -1 : 1;
+  const closing = Math.max(0, -((other.velocity.x - player.velocity.x) * line.x + (other.velocity.y - player.velocity.y) * line.y));
+  const speed = Math.min(8, SQUIRT_MIN_SPEED_MPS + 0.6 * closing);
+  ball.velocity = {
+    x: (player.velocity.x + other.velocity.x) / 2 + across.x * side * speed,
+    y: (player.velocity.y + other.velocity.y) / 2 + across.y * side * speed,
+    z: Math.max(0, ball.velocity.z),
+  };
+  if (ball.control.kind === "dribble") {
+    events.push({ kind: "possessionLost", playerId: ball.control.playerId, position: { ...ball.position } });
+    ball.control = { kind: "free" };
+    state.nextDribbleTouchTick = 0;
+  }
+  for (const body of [player, other]) state.bodyClearUntilTick[body.playerId] = state.tick + SQUIRT_CLEAR_TICKS;
+  ball.lastTouchPlayerId = player.playerId;
+  const flightAction = ball.flightAction;
+  delete ball.flightAction;
+  events.push({ kind: "ballTouch", playerId: player.playerId, outcome: "deflected", position: { ...ball.position }, flightAction });
   return true;
 }

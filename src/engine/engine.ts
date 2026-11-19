@@ -25,6 +25,7 @@ function stageTick(state: EngineState): EngineState {
     })),
     requestIds: new Map(state.requestIds),
     challengeReadyTick: { ...state.challengeReadyTick },
+    bodyClearUntilTick: { ...state.bodyClearUntilTick },
     events: [],
   };
 }

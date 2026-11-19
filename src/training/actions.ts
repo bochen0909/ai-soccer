@@ -5,7 +5,7 @@ import {
 } from "./contracts.js";
 import type { ActionSpace } from "./contracts.js";
 import type { BallConfig } from "../contracts/index.js";
-import { ballOf, keeperSaveAim, passingPower } from "../controllers/baseline.js";
+import { ballOf, keeperSaveAim, passingPower, SOFT_PASS_ARRIVAL_MPS, tackleAim } from "../controllers/baseline.js";
 import { flightLaunchSpeed } from "../engine/ball-flight.js";
 import { clamp, lead, toWorld, unitDirection } from "./geometry.js";
 
@@ -111,16 +111,19 @@ export function writeActionMask(context: AgentContext, space: ActionSpace, mask:
   if (ego.action) return;
 
   const toBall = Math.hypot(ball.position.x - ego.position.x, ball.position.y - ego.position.y, ball.position.z);
-  const targets = (loft: boolean) => {
+  // Hand releases and throw-ins have no soft variant, so only kicked ground passes offer it.
+  const targets = (loft: boolean, soft = !loft) => {
     for (let slot = 0; slot < context.team.length; slot += 1) {
-      if (passTarget(context, slot)) mask[offset + (loft ? space.loftBase : space.passBase) + slot] = 1;
+      if (!passTarget(context, slot)) continue;
+      mask[offset + (loft ? space.loftBase : space.passBase) + slot] = 1;
+      if (soft) mask[offset + space.softBase + slot] = 1;
     }
   };
 
   if (phase.kind === "kickoffSetup" || phase.kind === "restartSetup") {
     if (phase.takerId !== ego.playerId || observation.tick < phase.readyTick ||
         observation.tick >= phase.deadlineTick) return;
-    targets(false);
+    targets(false, phase.kind === "kickoffSetup" || phase.restart !== "throwIn");
     // The engine rejects lofted kickoffs and every non-pass kick at a kickoff.
     if (phase.kind === "restartSetup" && phase.restart !== "throwIn") targets(true);
     return;
@@ -128,7 +131,7 @@ export function writeActionMask(context: AgentContext, space: ActionSpace, mask:
   if (phase.kind !== "live") return;
 
   if (keeperHeldBy(observation, ego.playerId)) {
-    targets(false);
+    targets(false, false);
     targets(true);
     return;
   }
@@ -168,7 +171,9 @@ export function decodeAction(
     return { ...base, request: { kind: "kick", kickType: "shot", direction: aim, power: SHOT_POWER, loft: SHOT_LOFT } };
   }
   if (act === ACT_TACKLE) {
-    return { ...base, request: { kind: "tackle", direction: unitDirection(ego.position, origin, forward) } };
+    // Lunge where the ball will be at contact, or straight at it when it will be out of reach.
+    const aim = tackleAim(observation, ego) ?? unitDirection(ego.position, origin, forward);
+    return { ...base, request: { kind: "tackle", direction: aim } };
   }
   if (act === ACT_SAVE) {
     const aim = keeperSaveAim(observation, attack, ego);
@@ -176,8 +181,9 @@ export function decodeAction(
     return { ...base, request: { kind: "keeperSave", direction: aim ?? unitDirection(ego.position, target, forward) } };
   }
 
-  const loft = act >= space.loftBase;
-  const slot = act - (loft ? space.loftBase : space.passBase);
+  const soft = act >= space.softBase;
+  const loft = !soft && act >= space.loftBase;
+  const slot = act - (soft ? space.softBase : loft ? space.loftBase : space.passBase);
   const target = passTarget(context, slot);
   if (!target) return base;
   const range = Math.hypot(target.x - origin.x, target.y - origin.y);
@@ -188,7 +194,7 @@ export function decodeAction(
   }
   if (keeperHeldBy(observation, ego.playerId)) {
     const roll = !loft && range < Math.min(11, physical.maxKeeperRollSpeedMps ** 2 * 0.22);
-    const power = roll ? passingPower(range, physical.maxKeeperRollSpeedMps, ballConfig)
+    const power = roll ? passingPower(range, physical.maxKeeperRollSpeedMps, ballConfig, SOFT_PASS_ARRIVAL_MPS)
       : clamp(range / physical.maxKeeperThrowSpeedMps, 0.32, 0.82);
     return { ...base, request: { kind: "keeperRelease", technique: roll ? "roll" : "throw", direction: aim, power } };
   }
@@ -198,7 +204,7 @@ export function decodeAction(
   }
   return { ...base, request: {
     kind: "kick", kickType: "pass", direction: aim, loft: 0,
-    power: passingPower(range, physical.maxKickSpeedMps * 0.55, ballConfig),
+    power: passingPower(range, physical.maxKickSpeedMps * 0.55, ballConfig, soft ? SOFT_PASS_ARRIVAL_MPS : undefined),
   } };
 }
 

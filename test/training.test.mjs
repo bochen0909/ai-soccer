@@ -370,3 +370,46 @@ test('possessionByLastTouch keeps paying for a pass in flight, and is off by def
   assert.ok(without.every((reward) => reward === 0));
   assert.ok(withIt.every((reward) => Math.abs(reward - 0.01) < 1e-9));
 });
+
+test('a firm pass arrives quickly and a soft pass to the same teammate is slower', () => {
+  const kick = (soft) => {
+    const config = shortConfig();
+    const env = new SoccerTrainingEnv({ config });
+    const start = liveScenario(config);
+    const carrier = start.players.find(({ playerId }) => playerId === 'home-3');
+    start.ball.position = { x: carrier.position.x + 0.4, y: carrier.position.y, z: config.ball.radiusM };
+    let result = env.reset(9, start);
+    const slot = config.teams[0].players.findIndex(({ id }) => id === 'home-3');
+    const target = config.teams[0].players.findIndex(({ id }) => id === 'home-2');
+    const act = (soft ? env.actionSpace.softBase : env.actionSpace.passBase) + target;
+    assert.equal(mask(env, result, slot)[act], 1);
+    const actions = idle(env);
+    actions[slot * ACTION_FIELDS + 2] = act;
+    result = env.step(actions);
+    let fastest = 0;
+    for (let i = 0; i < 3; i += 1) {
+      result = env.step(idle(env));
+      const { velocity } = env.observation().ball;
+      fastest = Math.max(fastest, Math.hypot(velocity.x, velocity.y));
+    }
+    return fastest;
+  };
+  const [firm, soft] = [kick(false), kick(true)];
+  // A 12 m pass back past the carrier: firm launches near 10 m/s before the facing penalty, soft near 5 m/s.
+  assert.ok(firm > 7, `firm ${firm}`);
+  assert.ok(soft < 0.7 * firm, `soft ${soft} firm ${firm}`);
+});
+
+test('soft passes are offered for kicked ground passes but not for throw-ins', () => {
+  const config = shortConfig();
+  const env = new SoccerTrainingEnv({ config });
+  const { softBase, passBase, maxPlayers } = env.actionSpace;
+  assert.equal(env.actionSpace.actCount, ACT_PASS_BASE + 3 * maxPlayers);
+  const start = liveScenario(config);
+  const carrier = start.players.find(({ playerId }) => playerId === 'home-3');
+  start.ball.position = { x: carrier.position.x + 0.4, y: carrier.position.y, z: config.ball.radiusM };
+  const slot = config.teams[0].players.findIndex(({ id }) => id === 'home-3');
+  const live = mask(env, env.reset(9, start), slot);
+  for (let mate = 0; mate < maxPlayers; mate += 1) assert.equal(live[softBase + mate], live[passBase + mate]);
+  assert.ok([...live].slice(softBase).some(Boolean));
+});

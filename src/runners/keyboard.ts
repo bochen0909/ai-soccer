@@ -1,5 +1,6 @@
 import type { MatchConfig, Vec2 } from "../contracts/index.js";
-import { rollDistance, rollLaunchSpeed } from "../engine/ball-flight.js";
+import { flightLaunchSpeed, rollDistance, rollLaunchSpeed } from "../engine/ball-flight.js";
+import { FIRM_PASS_ARRIVAL_MPS } from "../controllers/baseline.js";
 import type { ActionIntent, PassTarget } from "../controllers/contracts.js";
 import type { HumanInput, SessionSnapshot } from "../session/contracts.js";
 
@@ -79,6 +80,10 @@ function passTarget(
   return best?.pass;
 }
 
+const LOFT = 0.36;
+/** The engine's loft elevation for LOFT: 15 degrees plus that share of the 35-degree range. */
+const LOFT_ELEVATION_RAD = ((15 + 35 * LOFT) * Math.PI) / 180;
+
 function groundPower(range: number, config: MatchConfig, speed: number, arrivalSpeed: number): number {
   return clamp(rollLaunchSpeed(range, arrivalSpeed, config.ball) / speed, 0, 0.96);
 }
@@ -96,10 +101,8 @@ function kick(
   const pass = passTarget(snapshot, player, config, aim, maxDistance, kind === "pass");
   const origin = snapshot.ball.position;
   const range = pass ? distance(origin, pass.target) : kind === "pass" ? 4 : 7;
-  // Keep short passes controllable and give passes into empty space a short rollout.
-  const shortPassArrival = Math.min(3.6, 2 + range * 0.075);
-  const longPassPace = fullSide ? clamp((range - 12) * 0.14, 0, 3.2) : 0;
-  const arrivalSpeed = pass ? shortPassArrival + longPassPace : 1.8;
+  // A pass to a teammate arrives firm (a little softer over a few metres); a pass into space gets a short rollout.
+  const arrivalSpeed = pass ? Math.min(FIRM_PASS_ARRIVAL_MPS, 4 + range * 0.4) : 1.8;
   const heading = pass ? direction(origin, pass.target, aim) : aim;
   const fromPlayer = direction(player.position, origin, aim);
   const needsClearLane = snapshot.phase.kind !== "live" &&
@@ -110,8 +113,9 @@ function kick(
     request: {
       kind: "kick", kickType: kind,
       direction: boundarySafeDirection(origin, safeHeading, config.pitch),
-      power: kind === "pass" ? groundPower(range, config, maxSpeed, arrivalSpeed) : clamp(0.44 + range / 54, 0.44, 0.95),
-      loft: kind === "pass" ? 0 : 0.36,
+      power: kind === "pass" ? groundPower(range, config, maxSpeed, arrivalSpeed)
+        : clamp(flightLaunchSpeed(range, LOFT_ELEVATION_RAD, config.ball) / maxSpeed, 0.44, 0.95),
+      loft: kind === "pass" ? 0 : LOFT,
     },
     pass,
   };

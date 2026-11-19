@@ -6,6 +6,7 @@ import { executionFactors, footQuality } from "./abilities.js";
 import { defenseTiming, isDefenseRequest } from "./defense.js";
 import { playerCapsule, sweepCapsule } from "./physics-geometry.js";
 import { randomUnit } from "./random.js";
+import { keeperDiveExtension } from "./keeper-save.js";
 import { inKeeperArea } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
@@ -314,6 +315,33 @@ function openKickoffLane(state: EngineState, player: PlayerState, direction: Vec
   }
 }
 
+/** Balance a tackler loses when the tackle misses: they committed and are briefly beaten. */
+const MISSED_TACKLE_BALANCE_LOSS = 0.5;
+/** Extra recovery ticks after a missed tackle. */
+const MISSED_TACKLE_RECOVERY_TICKS = 12;
+
+/** Balance a keeper loses at full stretch: they are on the ground and slow to get up. */
+const FULL_DIVE_BALANCE_LOSS = 0.6;
+
+/** A dive costs balance in proportion to how far the keeper stretched; a save at the body costs almost nothing. */
+function landFromSave(state: EngineState, pending: PendingAction): void {
+  if (pending.request.kind !== "keeperSave") return;
+  const keeper = state.players.find((entry) => entry.playerId === pending.action.playerId)!;
+  const extension = keeperDiveExtension(state.tick - pending.contactTick);
+  keeper.balance = Math.max(0, keeper.balance - FULL_DIVE_BALANCE_LOSS * extension);
+}
+
+/** A missed tackle leaves the tackler off balance and slow to go again; a dive that missed leaves the keeper down. */
+function missTackle(state: EngineState, slots: ActionSlots, pending: PendingAction): void {
+  enterRecovery(state, slots, pending);
+  landFromSave(state, pending);
+  if (pending.request.kind !== "tackle") return;
+  const player = state.players.find((entry) => entry.playerId === pending.action.playerId)!;
+  player.balance = Math.max(0, player.balance - MISSED_TACKLE_BALANCE_LOSS);
+  const recovery = slots.get(pending.action.playerId)!;
+  slots.set(pending.action.playerId, { ...recovery, readyTick: recovery.readyTick + MISSED_TACKLE_RECOVERY_TICKS });
+}
+
 function enterRecovery(
   state: EngineState, slots: ActionSlots, pending: PendingAction, interrupted = false,
 ): void {
@@ -337,7 +365,11 @@ export function finishDefenseContact(
   flightAction?: ActionKey,
 ): void {
   events.push({ kind: "actionContact", action: pending.action, outcome, position, flightAction });
-  enterRecovery(state, slots, pending);
+  if (outcome === "missed") missTackle(state, slots, pending);
+  else {
+    enterRecovery(state, slots, pending);
+    landFromSave(state, pending);
+  }
   // A short scenario deadline can end save recovery early so the rule can release on time.
   if (outcome === "caught" && state.keeperReleaseTick !== null) {
     const recovery = slots.get(pending.action.playerId)!;
@@ -379,7 +411,7 @@ export function processActions(
       events.push({
         kind: "actionContact", action: pending.action, outcome: "missed", position: { ...state.ball.position },
       });
-      enterRecovery(state, slots, pending);
+      missTackle(state, slots, pending);
     } else if (pending?.phase === "recovery" && state.tick >= pending.readyTick) {
       slots.delete(playerId);
       if (!pending.interrupted) {

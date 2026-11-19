@@ -21,6 +21,8 @@ export interface EngineState {
   touchExclusion: { playerId: PlayerId; untilTick: number } | null;
   /** Tick from which each player may again contest an opponent's dribble with their body. */
   challengeReadyTick: Record<PlayerId, number>;
+  /** Tick until which the ball passes each player's body, after it squirted out from between two of them. */
+  bodyClearUntilTick: Record<PlayerId, number>;
   nextDribbleTouchTick: number;
   requestIds: Map<PlayerId, number>;
   nextRuleRequestId: number;
@@ -595,6 +597,7 @@ export function buildResetState(config: MatchConfig, seed: number, scenario?: Sc
     keeperReleaseTick: null,
     touchExclusion: null,
     challengeReadyTick: {},
+    bodyClearUntilTick: {},
     nextDribbleTouchTick: 0,
     requestIds: new Map(),
     nextRuleRequestId: 1,

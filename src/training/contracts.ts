@@ -18,16 +18,22 @@ export const ACT_PASS_BASE = 6;
 export interface ActionSpace {
   maxPlayers: number;
   moveCount: number;
-  /** Number of values in the `act` field: none, three shots, tackle, save, then pass and loft per slot. */
+  /**
+   * Number of values in the `act` field: none, three shots, tackle, save, then per teammate slot a firm ground pass,
+   * a lofted pass and a soft ground pass.
+   */
   actCount: number;
+  /** Firm ground pass to slot k: arrives at about 8 m/s, quick and hard to cut out. */
   passBase: number;
   loftBase: number;
+  /** Soft ground pass to slot k: arrives at about 3 m/s, for short lay-offs and passes a runner can meet. */
+  softBase: number;
 }
 
 export function createActionSpace(maxPlayers: number): ActionSpace {
   return {
-    maxPlayers, moveCount: MOVE_COUNT, actCount: ACT_PASS_BASE + 2 * maxPlayers,
-    passBase: ACT_PASS_BASE, loftBase: ACT_PASS_BASE + maxPlayers,
+    maxPlayers, moveCount: MOVE_COUNT, actCount: ACT_PASS_BASE + 3 * maxPlayers,
+    passBase: ACT_PASS_BASE, loftBase: ACT_PASS_BASE + maxPlayers, softBase: ACT_PASS_BASE + 2 * maxPlayers,
   };
 }
 

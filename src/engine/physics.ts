@@ -1,7 +1,9 @@
 import type { ActionResult, PlayerAction, PlayerId, PlayerState, Vec2, Vec3 } from "../contracts/index.js";
 import { dueLaunch, finishDefenseContact, interruptAction, resolveLaunch } from "./actions.js";
 import type { ActionSlots, EventData, PendingAction } from "./actions.js";
-import { applyDribbleTouch, firstTouchCandidate, resolveBodyContact, resolveFirstTouch, updateDribbleControl } from "./ball-control.js";
+import {
+  applyDribbleTouch, firstTouchCandidate, resolveBodyContact, resolveFirstTouch, resolvePinch, updateDribbleControl,
+} from "./ball-control.js";
 import { defenseCandidate, isDefenseRequest, resolveDefense } from "./defense.js";
 import type { DefenseRequest } from "./defense.js";
 import { randomUnit } from "./random.js";
@@ -16,7 +18,7 @@ import {
   sweepCapsule,
 } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
-import { attackDirection, CONTROL_HEIGHT_FRACTION, keeperHoldPosition } from "./reset.js";
+import { attackDirection, CONTROL_HEIGHT_FRACTION, inKeeperArea, keeperHoldPosition } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
 export const PHYSICS_TICK_SECONDS = 1 / 60;
@@ -53,7 +55,7 @@ export class PhysicsError extends Error {
 type PhysicsEvent = { time: number } & (
   | { kind: "crossing"; axis: Axis; side: Side; plane: number }
   | { kind: "ground" }
-  | { kind: "ballContact"; normal: Vec3; collider: Capsule | PlayerState; player?: PlayerState }
+  | { kind: "ballContact"; normal: Vec3; collider: Capsule | PlayerState; player?: PlayerState; closing?: number }
   | { kind: "wall"; player: PlayerState; axis: Axis; plane: number }
   | { kind: "playerContact"; first: PlayerState; second: PlayerState }
   | { kind: "firstTouch"; player: PlayerState }
@@ -99,7 +101,7 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
     // Players in zero-time wall and player contacts. A pile of overlapping bodies pressed against a wall
     // can trade impulses forever without advancing time, so a second overrun is the only real failure.
     const jammed = new Set<PlayerState>();
-    let settled = false;
+    let settles = 0;
     const ballContacts = new Set<Capsule | PlayerState>();
     while (true) {
       const event = findNextEvent(state, goalFrames, remaining, play, firstTouchAvailable, ballContacts);
@@ -113,15 +115,11 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
         else if (event.kind === "playerContact") jammed.add(event.first).add(event.second);
       }
       if (++eventCount > MAX_EVENTS_PER_SUBSTEP) {
-        if (settled || jammed.size === 0) throw new PhysicsError(state.tick);
-        // Treat the pile-up as perfectly inelastic: everyone touching it stops, not only the players that
-        // happened to trade impulses lately, or the rest of a long row would restart the chain.
-        for (const { velocity } of contactGroup(state, jammed)) {
-          velocity.x = 0;
-          velocity.y = 0;
-        }
+        // Each settle merges at least the newest arrivals into a pile that then moves as one, so more settles than
+        // players means something other than a pile-up is wrong.
+        if (jammed.size === 0 || ++settles > state.players.length) throw new PhysicsError(state.tick);
+        settlePile(state, contactGroup(state, jammed));
         jammed.clear();
-        settled = true;
         eventCount = 0;
         continue;
       }
@@ -195,6 +193,8 @@ const eventPriority: Record<PhysicsEvent["kind"], number> = {
   crossing: 4,
 };
 
+/** Balance regained per second; a missed tackle's loss takes about 0.6 s to recover. */
+const BALANCE_RECOVERY_PER_SEC = 0.8;
 /** A player with the ball at their feet runs at this share of their top speed. */
 export const DRIBBLE_SPEED_SHARE = 0.9;
 /** Acceleration falls off toward top speed, but never below this share of the standing-start value. */
@@ -203,7 +203,9 @@ const MIN_ACCELERATION_SHARE = 0.2;
 function applyMovement(player: PlayerState, action: PlayerAction | undefined, seconds: number, carrying: boolean): void {
   const { maxSpeedMps, accelerationMps2, brakingMps2 } = player.definition.abilities.physical;
   const movement = action?.movement ?? { x: 0, y: 0 };
-  const speedLimit = maxSpeedMps * (0.75 + player.stamina * 0.25) * (carrying ? DRIBBLE_SPEED_SHARE : 1);
+  // An off-balance player (after a missed tackle) cannot run at full pace until they recover.
+  const speedLimit = maxSpeedMps * (0.75 + player.stamina * 0.25) * (carrying ? DRIBBLE_SPEED_SHARE : 1) *
+    (0.55 + 0.45 * player.balance);
   const targetSpeed = speedLimit * (action?.sprint ? 1 : 0.7);
   const target = { x: movement.x * targetSpeed, y: movement.y * targetSpeed };
   const difference = { x: target.x - player.velocity.x, y: target.y - player.velocity.y };
@@ -276,8 +278,12 @@ function findNextEvent(
   const consider = (event: PhysicsEvent): void => {
     if (event.time > duration) return;
     const simultaneous = first !== undefined && Math.abs(event.time - first.time) <= CONTACT_TIME_TOLERANCE;
+    // Bodies touching the ball at the same instant meet it in order of how fast they close on it, not roster order,
+    // so the outcome does not depend on which team is listed first.
+    const closesFaster = simultaneous && event.kind === "ballContact" && first!.kind === "ballContact" &&
+      (event.closing ?? 0) > (first!.closing ?? 0);
     if (first === undefined || event.time < first.time - CONTACT_TIME_TOLERANCE ||
-        (simultaneous && eventPriority[event.kind] < eventPriority[first.kind])) {
+        (simultaneous && eventPriority[event.kind] < eventPriority[first.kind]) || closesFaster) {
       first = event;
       tied = [];
     } else if (simultaneous && (event.kind === "firstTouch" || event.kind === "defense") &&
@@ -326,13 +332,14 @@ function findNextEvent(
   for (const player of state.players) {
     const pending = play.slots.get(player.playerId);
     // The player who just played the ball takes it around their body, so their kick or touch does not hit themselves.
-    const justPlayed = exclusion?.playerId === player.playerId && state.tick < exclusion.untilTick;
+    const justPlayed = (exclusion?.playerId === player.playerId && state.tick < exclusion.untilTick) ||
+      (state.bodyClearUntilTick[player.playerId] ?? 0) > state.tick;
     const relativeVelocity = subtract(velocity, onGround(player.velocity));
     const hit = justPlayed ? undefined : sweepCapsule(position, relativeVelocity, radiusM, playerCapsule(player), duration);
     // A ball pinched against the ground can overlap several bodies at the same instant.
     // Apply each collider's impulse once until the bodies have advanced in time.
     if (hit && (hit.time > CONTACT_TIME_TOLERANCE || !ballContacts.has(player))) {
-      consider({ kind: "ballContact", ...hit, collider: player, player });
+      consider({ kind: "ballContact", ...hit, collider: player, player, closing: -dot(relativeVelocity, hit.normal) });
     }
     if (pending?.phase === "active" && isDefenseRequest(pending.request)) {
       const contact = defenseCandidate(state, player, pending.request, duration, pending.contactTick);
@@ -420,6 +427,7 @@ function resolveContact(
         resolveHeader(state, event.player, event.normal, actions.get(event.player.playerId), events);
         break;
       }
+      if (event.player !== undefined && resolvePinch(state, event.player, events)) break;
       if (event.player !== undefined &&
           resolveBodyContact(state, event.player, event.normal, actions.get(event.player.playerId), slots, events)) break;
       const colliderVelocity = onGround(event.player?.velocity ?? { x: 0, y: 0 });
@@ -507,6 +515,27 @@ function resolveHeader(
   });
 }
 
+/**
+ * Treats a pile-up as perfectly inelastic: everyone touching it moves at the pile's momentum-weighted velocity, so
+ * nobody inside it can trade impulses again. Everyone touching it joins, not only the players that happened to trade
+ * impulses lately, or the rest of a long row would restart the chain. A pile pressed into a wall stops.
+ */
+function settlePile(state: EngineState, pile: ReadonlySet<PlayerState>): void {
+  let mass = 0;
+  const momentum = { x: 0, y: 0 };
+  for (const { definition, velocity } of pile) {
+    mass += definition.massKg;
+    momentum.x += definition.massKg * velocity.x;
+    momentum.y += definition.massKg * velocity.y;
+  }
+  let common = { x: momentum.x / mass, y: momentum.y / mass };
+  if ([...pile].some((player) => pinnedAgainstWall(state, player, { ...common, z: 0 }))) common = { x: 0, y: 0 };
+  for (const { velocity } of pile) {
+    velocity.x = common.x;
+    velocity.y = common.y;
+  }
+}
+
 /** The seed players plus everyone connected to them through touching or overlapping bodies. */
 function contactGroup(state: EngineState, seeds: ReadonlySet<PlayerState>): Set<PlayerState> {
   const group = new Set(seeds);
@@ -573,14 +602,22 @@ function updatePlayerState(
     const action = actions.get(player.playerId);
     const { turnRateRadPerSec, staminaDrainPerSec, staminaRecoveryPerSec } = player.definition.abilities.physical;
     const moving = action !== undefined && Math.hypot(action.movement.x, action.movement.y) > 0;
-    if (moving) {
-      const target = Math.atan2(action.movement.y, action.movement.x);
+    // A keeper in their area stays set, facing the ball as they shuffle, unless they sprint or carry it.
+    const { ball } = state;
+    const holding = ball.control.kind === "keeperHeld" && ball.control.playerId === player.playerId;
+    const setToBall = player.definition.role === "goalkeeper" && !holding && !(moving && action.sprint) &&
+      inKeeperArea(state, player) && Math.hypot(ball.position.x - player.position.x, ball.position.y - player.position.y) > 0.05;
+    if (moving || setToBall) {
+      const target = setToBall
+        ? Math.atan2(ball.position.y - player.position.y, ball.position.x - player.position.x)
+        : Math.atan2(action!.movement.y, action!.movement.x);
       const difference = wrapAngle(target - player.facingRad);
       const turn = turnRateRadPerSec * elapsedSeconds;
       player.facingRad = wrapAngle(player.facingRad + Math.max(-turn, Math.min(turn, difference)));
     }
     const exertion = moving && action.sprint ? -staminaDrainPerSec : staminaRecoveryPerSec;
     player.stamina = Math.max(0, Math.min(1, player.stamina + exertion * elapsedSeconds));
+    player.balance = Math.min(1, player.balance + BALANCE_RECOVERY_PER_SEC * elapsedSeconds);
   }
 
   if (state.ball.control.kind === "free") return;

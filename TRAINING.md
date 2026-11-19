@@ -42,9 +42,9 @@ Each agent submits `[move, sprint, act]`.
 | --- | --- |
 | `move` | 0 stop, 1..8 eight directions in 45 degree steps counterclockwise from the attack direction |
 | `sprint` | 0 or 1 |
-| `act` | 0 none, 1..3 shoot (left, center, right of goal), 4 tackle, 5 keeper save, `6 + k` pass to slot k, `6 + N + k` lofted pass to slot k |
+| `act` | 0 none, 1..3 shoot (left, center, right of goal), 4 tackle, 5 keeper save, `6 + k` firm pass to slot k, `6 + N + k` lofted pass to slot k, `6 + 2N + k` soft pass to slot k |
 
-The adapter turns target choices into engine requests: it leads the receiver by 0.32 s, then derives direction and power from range (the same formulas as the baseline). The same `pass` act becomes a throw-in at a throw-in, and a roll or throw when the keeper holds the ball.
+The adapter turns target choices into engine requests: it leads the receiver by 0.32 s, then derives direction and power from range (the same formulas as the baseline). A firm pass is paced to arrive at 8 m/s, a soft one at 3 m/s (`FIRM_PASS_ARRIVAL_MPS`, `SOFT_PASS_ARRIVAL_MPS` in `src/controllers/baseline.ts`, using the rolling model in `src/engine/ball-flight.ts`). A tackle is aimed where the ball will be when its windup ends. The same firm `pass` act becomes a throw-in at a throw-in, and a roll or throw when the keeper holds the ball; soft passes are legal only for kicked ground passes. `python/add_soft_passes.py` adds the soft acts to policies (JSON or checkpoint) trained before they existed, as copies of the firm-pass rows with a lower bias.
 
 `actionMask` (`[agents, actCount]`) marks legal acts. A pass needs the ball within reach, restarts allow only the taker, a save needs the keeper in its area, and so on. Illegal acts are replaced by "none" and counted in `info.illegalActions`. Mask the policy's logits with it.
 
@@ -80,7 +80,7 @@ Every drill draws its learner outfield players (carrier, runner and so on) and t
 
 ## Teacher labels, imitation and export
 
-- `scripts/record-demos.mjs` records a baseline profile's decisions in this document's observation and action format. `intentToChoice` converts a controller's decision to `[move, sprint, act]`: movement snaps to the nearest of 8 directions, and a pass becomes "pass to slot k", using the named receiver or else the best-aligned legal teammate.
+- `scripts/record-demos.mjs` records a baseline profile's decisions in this document's observation and action format. `intentToChoice` converts a controller's decision to `[move, sprint, act]`: movement snaps to the nearest of 8 directions, and a pass becomes "pass to slot k", using the named receiver or else the best-aligned legal teammate; a ground pass that would arrive nearer the soft pace than the firm one becomes the soft act.
 - The env server's `teacher` option returns, for every state it reports, what a baseline profile would do there. That is what DAgger (`python/dagger.py`) uses to label the states the student visits.
 - `python/export_policy.py` writes a checkpoint to a JSON file of exact float32 weights, and `NeuralTeamAI` (team AI "neural", `src/controllers/neural.ts`) plays with it. A controller's `AIContext` includes `opponents` (the other roster in order), because the policy's input lists opponents in roster order.
 

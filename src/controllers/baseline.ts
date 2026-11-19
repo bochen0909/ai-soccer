@@ -1,6 +1,7 @@
 import type { AttackDirection, BallConfig, PlayerId, TeamObservation, Vec2 } from "../contracts/index.js";
 import { ballPositionAfter, rollLaunchSpeed, rollSpeedAfter } from "../engine/ball-flight.js";
 import { createArcadeConfig } from "../presets/arcade.js";
+import { defenseTiming, tackleReachM } from "../engine/defense.js";
 import { keeperDiveExtension, keeperSaveTiming, keeperSaveVolumes } from "../engine/keeper-save.js";
 import { capsuleDistanceSquared } from "../engine/physics-geometry.js";
 import type {
@@ -152,9 +153,14 @@ export function ballOf(world: TeamObservation): BallConfig {
   return world.ballConfig ?? ARCADE_BALL;
 }
 
-/** Power for a ground pass that still rolls at 2 m/s, enough to reach the receiver's foot, when it gets there. */
-export function passingPower(range: number, speedLimit: number, ball: BallConfig): number {
-  return clamp(rollLaunchSpeed(range, 2, ball) / speedLimit, 0.18, 0.88);
+/** Speed a firm ground pass has when it reaches the receiver: quick, and still easy for a default first touch. */
+export const FIRM_PASS_ARRIVAL_MPS = 8;
+/** Speed a soft ground pass has when it reaches the receiver. */
+export const SOFT_PASS_ARRIVAL_MPS = 3;
+
+/** Power for a ground pass that is still rolling at `arrival` when it reaches the receiver. */
+export function passingPower(range: number, speedLimit: number, ball: BallConfig, arrival = FIRM_PASS_ARRIVAL_MPS): number {
+  return clamp(rollLaunchSpeed(range, arrival, ball) / speedLimit, 0.18, 1);
 }
 
 function restart(tactics: Tactics, player: PlayerState): PlayerIntent {
@@ -291,7 +297,11 @@ function formation(tactics: Tactics, player: PlayerState, mode: Mode): Vec2 {
 }
 
 function saveAim(tactics: Tactics, player: PlayerState, ownGoalX: number): Vec2 | undefined {
-  const { ball, pitch, tuning } = tactics.world;
+  const { ball, pitch, tuning, players } = tactics.world;
+  // The back-pass rule, and a teammate's own ball: the keeper has nothing to save.
+  const teammate = (id: PlayerId | undefined) => players.some((entry) => entry.playerId === id && entry.teamId === player.teamId);
+  if (ball.flightAction && ball.flightAction.playerId !== player.playerId && teammate(ball.flightAction.playerId)) return undefined;
+  if (ball.control.kind === "dribble" && teammate(ball.control.playerId)) return undefined;
   const { windup, active } = keeperSaveTiming(player.definition.abilities.technical.goalkeeping);
   const ballRadius = ballOf(tactics.world).radiusM;
   let best: { aim: Vec2; miss: number } | undefined;
@@ -312,6 +322,22 @@ function saveAim(tactics: Tactics, player: PlayerState, ownGoalX: number): Vec2 
     }
   }
   return best?.aim;
+}
+
+/**
+ * The direction for a tackle started now, toward where the ball will be once the windup is over, or undefined when the
+ * lunge will not reach it then. The tackler is slowed during the windup, so they cover less ground than at their pace.
+ */
+export function tackleAim(world: TeamObservation, player: PlayerState): Vec2 | undefined {
+  const { windup } = defenseTiming(player, { id: 0, kind: "tackle", direction: { x: 1, y: 0 } });
+  const seconds = (windup + 2) / 60;
+  const ball = ballPositionAfter(world.ball.position, world.ball.velocity, seconds, ballOf(world));
+  if (ball.z > ballOf(world).radiusM + player.definition.radiusM) return undefined;
+  const self = lead(player.position, player.velocity, seconds * 0.6);
+  const offset = difference(self, ball);
+  const range = length(offset);
+  if (range > tackleReachM(player) * 0.95 || range < 1e-3) return undefined;
+  return { x: offset.x / range, y: offset.y / range };
 }
 
 /**
@@ -348,7 +374,7 @@ function goalkeeper(tactics: Tactics, player: PlayerState): PlayerIntent {
     const roll = range < Math.min(11, physical.maxKeeperRollSpeedMps ** 2 * 0.22);
     return { ...idle(player), request: {
       kind: "keeperRelease", technique: roll ? "roll" : "throw", direction: direction(player.position, target, attack),
-      power: roll ? passingPower(range, physical.maxKeeperRollSpeedMps, ballOf(tactics.world))
+      power: roll ? passingPower(range, physical.maxKeeperRollSpeedMps, ballOf(tactics.world), SOFT_PASS_ARRIVAL_MPS)
         : clamp(range / physical.maxKeeperThrowSpeedMps, 0.32, 0.82),
     } };
   }
@@ -474,10 +500,8 @@ export class BaselineTeamAI implements TeamAI {
       if (primary?.player.playerId === player.playerId) {
         const range = distance(player.position, ball.position);
         const chase = move(player, primary.target, range > 3.5 - this.traits.aggression);
-        const reach = player.definition.abilities.physical.reachM;
-        if (mode === "defend" && !player.action && range < reach * 1.06 && ball.position.z < player.definition.radiusM + 0.1) {
-          return { ...chase, request: { kind: "tackle", direction: direction(player.position, primary.target, tactics.attack) } };
-        }
+        const aim = mode === "defend" && !player.action ? tackleAim(tactics.world, player) : undefined;
+        if (aim) return { ...chase, request: { kind: "tackle", direction: aim } };
         return chase;
       }
       const anchor = formation(tactics, player, mode);

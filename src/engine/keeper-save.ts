@@ -15,12 +15,24 @@ export function keeperDiveExtension(ticks: number): number {
   return Math.max(0, Math.min(1, ticks / KEEPER_DIVE_TICKS));
 }
 
+/**
+ * How far a save goes away from the way the keeper faces: 0 within 60 degrees either side, rising to 1 for a save
+ * straight behind them. A keeper reaches and holds far less well across or behind their body.
+ */
+export function saveStrain(player: PlayerState, direction: Vec2): number {
+  const offset = Math.atan2(direction.y, direction.x) - player.facingRad;
+  const angle = Math.abs(Math.atan2(Math.sin(offset), Math.cos(offset)));
+  return Math.max(0, Math.min(1, (angle - Math.PI / 3) / (2 * Math.PI / 3)));
+}
+
 export function keeperSaveVolumes(player: PlayerState, direction: Vec2, reachScale = 1, extension = 0): Capsule[] {
   const { abilities, radiusM: bodyRadius, bodyHeightM } = player.definition;
   const skill = abilities.technical.goalkeeping;
   const exertion = (0.65 + 0.35 * player.stamina) * (0.7 + 0.3 * player.balance);
-  const reach = reachScale * abilities.physical.reachM * (0.82 + 0.18 * skill) * (0.88 + 0.12 * exertion);
-  const dive = Math.max(0, Math.min(1, extension)) * DIVE_REACH_M * (0.6 + 0.4 * skill) * exertion;
+  const strain = saveStrain(player, direction);
+  const reach = reachScale * abilities.physical.reachM * (0.82 + 0.18 * skill) * (0.88 + 0.12 * exertion) *
+    (1 - 0.55 * strain);
+  const dive = Math.max(0, Math.min(1, extension)) * DIVE_REACH_M * (0.6 + 0.4 * skill) * exertion * (1 - 0.6 * strain);
   const radiusM = Math.min(bodyRadius * 0.92, reach * 0.36);
   const point = (distance: number, z: number) => ({
     x: player.position.x + direction.x * distance,
