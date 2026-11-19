@@ -50,6 +50,7 @@ export function createArcadeConfig(): MatchConfig {
       keeperAreaDepthM: 8,
       keeperAreaWidthM: 16,
       centerCircleRadiusM: 3,
+      runOffM: 2,
     },
     ball: {
       radiusM: 0.11,
@@ -98,6 +99,7 @@ export function createElevenAsideConfig(): MatchConfig {
       keeperAreaDepthM: 16.5,
       keeperAreaWidthM: 40.32,
       centerCircleRadiusM: 9.15,
+      runOffM: 3,
     },
     teams: [team("home", fullSizeFormation), team("away", fullSizeFormation)],
     periodTicks: [10800, 10800],

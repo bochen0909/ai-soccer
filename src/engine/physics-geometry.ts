@@ -1,5 +1,7 @@
 import type { PitchConfig, PlayerState, Vec3 } from "../contracts/index.js";
 
+export const PHYSICS_TICK_SECONDS = 1 / 60;
+
 export interface Capsule {
   start: Vec3;
   end: Vec3;

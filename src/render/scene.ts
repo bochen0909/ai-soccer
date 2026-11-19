@@ -193,7 +193,8 @@ export class PitchRenderer {
     this.canvas.height = Math.round(height * ratio);
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
     const { lengthM, widthM } = this.config.pitch;
-    this.scale = Math.min(width / (lengthM * 1.085 + 10), height / (widthM * 0.68 + 7.2));
+    const { runOffM } = this.config.pitch;
+    this.scale = Math.min(width / (lengthM * 1.085 + 6 + 2 * runOffM), height / (widthM * 0.68 + 5.2 + runOffM));
     this.background.width = this.canvas.width;
     this.background.height = this.canvas.height;
     const context = this.background.getContext("2d");
@@ -222,10 +223,12 @@ export class PitchRenderer {
     ctx.fillStyle = stadium;
     ctx.fillRect(0, 0, this.width, this.height);
 
-    this.drawStand(ctx, y);
-    polygon(ctx, this.rect(-x - 3.8, x + 3.8, -y - 3.6, y + 3.7), "#122625");
-    polygon(ctx, this.rect(-x - 2.3, x + 2.3, -y - 2.2, y + 2.2), "#294139");
-    polygon(ctx, this.rect(-x - 1.6, x + 1.6, -y - 1.5, y + 1.5), "#22513b");
+    // Grass runs on past the lines over the run-off strip, where players may go, then the surround.
+    const runOff = this.config.pitch.runOffM;
+    this.drawStand(ctx, y + runOff);
+    polygon(ctx, this.rect(-x - runOff - 2.2, x + runOff + 2.2, -y - runOff - 2, y + runOff + 2.1), "#122625");
+    polygon(ctx, this.rect(-x - runOff - 0.7, x + runOff + 0.7, -y - runOff - 0.6, y + runOff + 0.6), "#294139");
+    polygon(ctx, this.rect(-x - runOff, x + runOff, -y - runOff, y + runOff), "#22513b");
 
     const stripes = 12;
     for (let index = 0; index < stripes; index++) {
@@ -253,7 +256,7 @@ export class PitchRenderer {
   }
 
   private drawStand(ctx: CanvasRenderingContext2D, halfWidth: number): void {
-    const front = this.project(0, -halfWidth - 2.4).y;
+    const front = this.project(0, -halfWidth - 0.8).y;
     const length = this.width * 0.94;
     const left = (this.width - length) / 2;
     const back = front - this.scale * 3.1;

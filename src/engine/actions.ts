@@ -7,7 +7,8 @@ import { defenseTiming, isDefenseRequest } from "./defense.js";
 import { playerCapsule, sweepCapsule } from "./physics-geometry.js";
 import { randomUnit } from "./random.js";
 import { keeperDiveExtension } from "./keeper-save.js";
-import { inKeeperArea } from "./reset.js";
+import { ballInReachAtContact, KICK_TECHNIQUES, kickWindupTicks } from "./kick-timing.js";
+import { inKeeperArea, secondTouchBarred } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
 export type EventData<T = MatchEvent> = T extends MatchEvent ? Omit<T, "tick" | "ordinal"> : never;
@@ -28,11 +29,7 @@ export interface PendingAction {
 
 export type ActionSlots = Map<PlayerId, PendingAction>;
 
-const techniques = {
-  pass: { speed: 0.55, minElevation: 0, maxElevation: 5, windup: 6, recovery: 8 },
-  shot: { speed: 1, minElevation: 0, maxElevation: 25, windup: 8, recovery: 12 },
-  loft: { speed: 0.75, minElevation: 15, maxElevation: 50, windup: 12, recovery: 12 },
-};
+const techniques = KICK_TECHNIQUES;
 
 export function isSetup(phase: EngineState["phase"]): phase is Setup {
   return phase.kind === "kickoffSetup" || phase.kind === "restartSetup";
@@ -104,9 +101,35 @@ export function normalizeFrame(state: EngineState, frame: ActionFrame): Map<Play
 function mayKick(state: EngineState, player: PlayerState): boolean {
   const { control, position } = state.ball;
   const reach = player.definition.abilities.physical.reachM;
-  return control.kind !== "keeperHeld" &&
+  return control.kind !== "keeperHeld" && !secondTouchBarred(state, player) &&
     (control.kind === "free" || control.playerId === player.playerId) &&
     Math.hypot(position.x - player.position.x, position.y - player.position.y, position.z) <= reach;
+}
+
+/**
+ * A kick in open play may start on a ball in reach, or on a free ball that will be in reach when the foot meets it:
+ * a first-time shot or pass is shaped up before the ball arrives.
+ */
+function mayStartKick(state: EngineState, player: PlayerState, request: Extract<ActionRequest, { kind: "kick" }>): boolean {
+  if (mayKick(state, player)) return true;
+  const { ball } = state;
+  return ball.control.kind === "free" && !secondTouchBarred(state, player) && ballInReachAtContact(
+    { position: player.position, velocity: player.velocity, reachM: player.definition.abilities.physical.reachM },
+    ball, kickWindupTicks(request.kickType, request.power), state.config.ball,
+  );
+}
+
+/**
+ * A kick stays on while the ball is at the kicker's feet, or is free and still on course to be in reach when the foot
+ * meets it. A ball knocked away calls the kick off at once, so the player can go after it.
+ */
+function kickStillOn(state: EngineState, player: PlayerState, pending: PendingAction): boolean {
+  if (mayKick(state, player)) return true;
+  const { ball } = state;
+  return ball.control.kind === "free" && !secondTouchBarred(state, player) && ballInReachAtContact(
+    { position: player.position, velocity: player.velocity, reachM: player.definition.abilities.physical.reachM },
+    ball, Math.max(0, pending.contactTick - state.tick), state.config.ball,
+  );
 }
 
 function pointsInfield(state: EngineState, spot: Vec2, direction: Vec2): boolean {
@@ -140,7 +163,7 @@ function rejection(state: EngineState, player: PlayerState, request: ActionReque
         control.kind === "dribble" && control.playerId === player.playerId)) return "ballUnavailable";
     return undefined;
   }
-  return mayKick(state, player) ? undefined : "ballUnavailable";
+  return request.kind === "kick" && mayStartKick(state, player, request) ? undefined : "ballUnavailable";
 }
 
 function actionTiming(
@@ -149,11 +172,10 @@ function actionTiming(
   if (isDefenseRequest(request)) return defenseTiming(player, request);
   if (request.kind === "throwIn") return { windup: 12, active: 0, recovery: 12 };
   if (request.kind === "keeperRelease") return { windup: 6, active: 0, recovery: 8 };
-  const technique = techniques[request.kickType];
   return {
-    windup: technique.windup + (request.kickType === "shot" ? Math.round(10 * request.power) : 0),
+    windup: kickWindupTicks(request.kickType, request.power),
     active: 0,
-    recovery: technique.recovery,
+    recovery: techniques[request.kickType].recovery,
   };
 }
 
@@ -272,6 +294,11 @@ function launch(
   state.ball.lastTouchPlayerId = player.playerId;
   state.keeperReleaseTick = null;
   state.ball.flightAction = action;
+  // The taker of a restart may not play the ball again, and a keeper may not pick it up again, until someone else
+  // touches it.
+  if (setup || request.kind === "keeperRelease") {
+    state.ball.secondTouch = { playerId: player.playerId, handsOnly: !setup };
+  } else delete state.ball.secondTouch;
   state.touchExclusion = { playerId: player.playerId, untilTick: state.tick + 8 };
   state.nextDribbleTouchTick = 0;
   events.push({
@@ -443,7 +470,7 @@ export function processActions(
       if (state.tick >= pending.contactTick) {
         slots.set(player.playerId, { ...pending, phase: "active" });
       }
-    } else if (request.kind === "kick" && state.phase.kind === "live" && !mayKick(state, player)) {
+    } else if (request.kind === "kick" && state.phase.kind === "live" && !kickStillOn(state, player, pending)) {
       interruptAction(state, slots, player.playerId, results, "ballUnavailable");
     } else if (isSetup(state.phase) && dueLaunch(state, pending)) {
       resolveLaunch(state, slots, player, events, results);

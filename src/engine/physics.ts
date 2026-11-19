@@ -9,6 +9,7 @@ import type { DefenseRequest } from "./defense.js";
 import { randomUnit } from "./random.js";
 import {
   CONTACT_TIME_TOLERANCE,
+  PHYSICS_TICK_SECONDS,
   along,
   dot,
   goalFrameCapsules,
@@ -18,10 +19,12 @@ import {
   sweepCapsule,
 } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
-import { attackDirection, CONTROL_HEIGHT_FRACTION, inKeeperArea, keeperHoldPosition } from "./reset.js";
+import {
+  attackDirection, CONTROL_HEIGHT_FRACTION, expireSecondTouch, inKeeperArea, keeperHoldPosition, secondTouchBarred,
+} from "./reset.js";
 import type { EngineState } from "./reset.js";
 
-export const PHYSICS_TICK_SECONDS = 1 / 60;
+export { PHYSICS_TICK_SECONDS };
 const SUBSTEPS = 4;
 const MAX_EVENTS_PER_SUBSTEP = 128;
 const WALL_PIN_TOLERANCE = 1e-6;
@@ -159,6 +162,7 @@ export function advancePhysics(state: EngineState, play: TickPlay): PhysicsOutco
           resolveContact(state, event, events, play.actions, slots);
       }
       updateDribbleControl(state, events);
+      expireSecondTouch(state);
       carryBallInKickWindup(state, slots);
     }
     updateDribbleControl(state, events);
@@ -195,6 +199,10 @@ const eventPriority: Record<PhysicsEvent["kind"], number> = {
 
 /** Balance regained per second; a missed tackle's loss takes about 0.6 s to recover. */
 const BALANCE_RECOVERY_PER_SEC = 0.8;
+/** Balance a player loses per m/s of speed a collision with another player takes out of them. */
+const COLLISION_BALANCE_LOSS_PER_MPS = 0.12;
+/** Share of top speed (5.5 m/s for an adult, the usual high-speed running threshold) above which running costs stamina. */
+const STEADY_RUN_EFFORT = 0.65;
 /** A player with the ball at their feet runs at this share of their top speed. */
 export const DRIBBLE_SPEED_SHARE = 0.9;
 /** Acceleration falls off toward top speed, but never below this share of the standing-start value. */
@@ -222,10 +230,22 @@ function applyMovement(player: PlayerState, action: PlayerAction | undefined, se
 }
 
 function movementBounds(state: EngineState, player: PlayerState): PlayerBounds {
-  const { lengthM, widthM, keeperAreaDepthM, keeperAreaWidthM } = state.config.pitch;
+  const { lengthM, widthM, keeperAreaDepthM, keeperAreaWidthM, runOffM, goalWidthM, postRadiusM } = state.config.pitch;
   const { radiusM } = player.definition;
-  const min = { x: -lengthM / 2 + radiusM, y: -widthM / 2 + radiusM };
-  const max = { x: lengthM / 2 - radiusM, y: widthM / 2 - radiusM };
+  // Players may run on the run-off strip beyond the lines; its outer edge is the wall.
+  const min = { x: -lengthM / 2 - runOffM + radiusM, y: -widthM / 2 - runOffM + radiusM };
+  const max = { x: lengthM / 2 + runOffM - radiusM, y: widthM / 2 + runOffM - radiusM };
+  // The goals are solid boxes behind the goal lines: in front of the mouth the line is the net, and beside a goal,
+  // behind the line, its side netting stops a player moving across.
+  const netHalfWidth = goalWidthM / 2 + postRadiusM + radiusM;
+  const behindLine = Math.abs(player.position.x) > lengthM / 2 - radiusM + WALL_PIN_TOLERANCE;
+  if (!behindLine && Math.abs(player.position.y) < netHalfWidth) {
+    max.x = Math.min(max.x, lengthM / 2 - radiusM);
+    min.x = Math.max(min.x, -lengthM / 2 + radiusM);
+  } else if (behindLine) {
+    if (player.position.y >= 0) min.y = Math.max(min.y, netHalfWidth);
+    else max.y = Math.min(max.y, -netHalfWidth);
+  }
   if (state.ball.control.kind === "keeperHeld" && state.ball.control.playerId === player.playerId) {
     const defendsNegativeX = attackDirection(state, player.teamId) === 1;
     if (defendsNegativeX) max.x = Math.min(max.x, -lengthM / 2 + keeperAreaDepthM);
@@ -233,7 +253,7 @@ function movementBounds(state: EngineState, player: PlayerState): PlayerBounds {
     min.y = Math.max(min.y, -keeperAreaWidthM / 2);
     max.y = Math.min(max.y, keeperAreaWidthM / 2);
   }
-  // A taker may begin just outside the field. They can reenter without teleportation.
+  // A scenario may place a player beyond the run-off edge. They can come back without teleportation.
   min.x = Math.min(min.x, player.position.x);
   min.y = Math.min(min.y, player.position.y);
   max.x = Math.max(max.x, player.position.x);
@@ -332,8 +352,9 @@ function findNextEvent(
   for (const player of state.players) {
     const pending = play.slots.get(player.playerId);
     // The player who just played the ball takes it around their body, so their kick or touch does not hit themselves.
+    // A restart taker barred from a second touch lets it by too, rather than nudging it along with their body.
     const justPlayed = (exclusion?.playerId === player.playerId && state.tick < exclusion.untilTick) ||
-      (state.bodyClearUntilTick[player.playerId] ?? 0) > state.tick;
+      (state.bodyClearUntilTick[player.playerId] ?? 0) > state.tick || secondTouchBarred(state, player);
     const relativeVelocity = subtract(velocity, onGround(player.velocity));
     const hit = justPlayed ? undefined : sweepCapsule(position, relativeVelocity, radiusM, playerCapsule(player), duration);
     // A ball pinched against the ground can overlap several bodies at the same instant.
@@ -458,7 +479,7 @@ const HEADER_GOAL_RANGE_M = 22;
 
 function canHeader(state: EngineState, player: PlayerState): boolean {
   const { ball } = state;
-  return state.config.rules.headerContact === true && ball.control.kind === "free" &&
+  return state.config.rules.headerContact === true && ball.control.kind === "free" && !secondTouchBarred(state, player) &&
     ball.position.z > player.definition.bodyHeightM * CONTROL_HEIGHT_FRACTION;
 }
 
@@ -518,7 +539,7 @@ function resolveHeader(
 /**
  * Treats a pile-up as perfectly inelastic: everyone touching it moves at the pile's momentum-weighted velocity, so
  * nobody inside it can trade impulses again. Everyone touching it joins, not only the players that happened to trade
- * impulses lately, or the rest of a long row would restart the chain. A pile pressed into a wall stops.
+ * impulses lately, or the rest of a long row would restart the chain.
  */
 function settlePile(state: EngineState, pile: ReadonlySet<PlayerState>): void {
   let mass = 0;
@@ -528,8 +549,16 @@ function settlePile(state: EngineState, pile: ReadonlySet<PlayerState>): void {
     momentum.x += definition.massKg * velocity.x;
     momentum.y += definition.massKg * velocity.y;
   }
-  let common = { x: momentum.x / mass, y: momentum.y / mass };
-  if ([...pile].some((player) => pinnedAgainstWall(state, player, { ...common, z: 0 }))) common = { x: 0, y: 0 };
+  const common = { x: momentum.x / mass, y: momentum.y / mass };
+  // The pile cannot move into a wall any member stands against, however slowly, but it can slide along it. A slow
+  // push into a corner otherwise restarts the chain of contacts each time a wall stops one member.
+  for (const player of pile) {
+    const { min, max } = movementBounds(state, player);
+    for (const axis of ["x", "y"] as const) {
+      if ((common[axis] > 0 && player.position[axis] >= max[axis] - WALL_PIN_TOLERANCE) ||
+          (common[axis] < 0 && player.position[axis] <= min[axis] + WALL_PIN_TOLERANCE)) common[axis] = 0;
+    }
+  }
   for (const { velocity } of pile) {
     velocity.x = common.x;
     velocity.y = common.y;
@@ -582,6 +611,12 @@ function resolvePlayerContact(state: EngineState, first: PlayerState, second: Pl
   first.velocity.y += normal.y * impulse * firstInverseMass;
   second.velocity.x -= normal.x * impulse * secondInverseMass;
   second.velocity.y -= normal.y * impulse * secondInverseMass;
+  // A bump unsettles both players in proportion to the speed it takes out of each; a heavier body is jolted less.
+  // A player pinned against a wall still takes the hit.
+  for (const player of [first, second]) {
+    const jolt = Math.abs(impulse) / player.definition.massKg;
+    player.balance = Math.max(0, player.balance - COLLISION_BALANCE_LOSS_PER_MPS * jolt);
+  }
 }
 
 function limitBallSpeed(velocity: Vec3, maxSpeed: number): void {
@@ -615,7 +650,12 @@ function updatePlayerState(
       const turn = turnRateRadPerSec * elapsedSeconds;
       player.facingRad = wrapAngle(player.facingRad + Math.max(-turn, Math.min(turn, difference)));
     }
-    const exertion = moving && action.sprint ? -staminaDrainPerSec : staminaRecoveryPerSec;
+    // Stamina follows the pace actually run: above a steady run it drains, reaching the full drain at top speed;
+    // below it recovers, fastest at a standstill.
+    const effort = Math.hypot(player.velocity.x, player.velocity.y) / player.definition.abilities.physical.maxSpeedMps;
+    const exertion = effort > STEADY_RUN_EFFORT
+      ? -staminaDrainPerSec * Math.min(1, (effort - STEADY_RUN_EFFORT) / (1 - STEADY_RUN_EFFORT))
+      : staminaRecoveryPerSec * (1 - effort / STEADY_RUN_EFFORT);
     player.stamina = Math.max(0, Math.min(1, player.stamina + exertion * elapsedSeconds));
     player.balance = Math.min(1, player.balance + BALANCE_RECOVERY_PER_SEC * elapsedSeconds);
   }

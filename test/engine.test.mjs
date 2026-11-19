@@ -393,7 +393,9 @@ test('interrupted kicks retain recovery and produce one terminal result', () => 
 
   const initial = step(engine, [kick(1)]);
   assert.equal(initial.actionResults[0]?.status, 'accepted');
-  const terminal = step(engine);
+  // A free ball only has to be in reach at contact, so the kick is called off when the foot comes through.
+  let terminal = step(engine);
+  for (let tick = 0; tick < 10 && terminal.actionResults.length === 0; tick++) terminal = step(engine);
   assert.equal(terminal.actionResults[0]?.status, 'interrupted');
   assert.equal(terminal.actionResults[0]?.reason, 'ballUnavailable');
   const busy = step(engine, [kick(2)]);

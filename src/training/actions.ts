@@ -7,6 +7,8 @@ import type { ActionSpace } from "./contracts.js";
 import type { BallConfig } from "../contracts/index.js";
 import { ballOf, keeperSaveAim, passingPower, SOFT_PASS_ARRIVAL_MPS, tackleAim } from "../controllers/baseline.js";
 import { flightLaunchSpeed } from "../engine/ball-flight.js";
+import { ballInReachAtContact, kickWindupTicks } from "../engine/kick-timing.js";
+import type { KickType } from "../engine/kick-timing.js";
 import { clamp, lead, toWorld, unitDirection } from "./geometry.js";
 
 type PlayerState = TeamObservation["players"][number];
@@ -137,17 +139,27 @@ export function writeActionMask(context: AgentContext, space: ActionSpace, mask:
   }
   if (ball.control.kind === "keeperHeld") return;
 
-  const ownDribble = ball.control.kind === "dribble" && ball.control.playerId === ego.playerId;
-  const mayKick = toBall <= physical.reachM && (ball.control.kind === "free" || ownDribble);
-  if (mayKick) {
-    for (const act of [ACT_SHOOT_LEFT, ACT_SHOOT_CENTER, ACT_SHOOT_RIGHT]) mask[offset + act] = 1;
-    targets(false);
-    targets(true);
-  }
-  if (!ownDribble && toBall <= 3) mask[offset + ACT_TACKLE] = 1;
+  // The second-touch rule: a restart taker may not play the ball again, nor a keeper handle it again after letting
+  // go, until someone else touches it.
+  const ban = ball.secondTouch?.playerId === ego.playerId && ball.lastTouchPlayerId === ego.playerId
+    ? ball.secondTouch : undefined;
   // A save is legal only when one started now could reach the ball, so a dive is never wasted on bad timing.
-  if (ego.definition.role === "goalkeeper" && inKeeperArea(context) &&
+  if (ego.definition.role === "goalkeeper" && inKeeperArea(context) && !ban &&
       keeperSaveAim(observation, context.attack, ego) !== undefined) mask[offset + ACT_SAVE] = 1;
+  if (ban && !ban.handsOnly) return;
+
+  const ownDribble = ball.control.kind === "dribble" && ball.control.playerId === ego.playerId;
+  const inReach = toBall <= physical.reachM && (ball.control.kind === "free" || ownDribble);
+  // A free ball on its way can be met first time when it will be in reach as the foot comes through.
+  const mayKick = (kickType: KickType, power: number) => inReach || (ball.control.kind === "free" &&
+    ballInReachAtContact({ position: ego.position, velocity: ego.velocity, reachM: physical.reachM }, ball,
+      kickWindupTicks(kickType, power), ballOf(observation)));
+  if (mayKick("shot", SHOT_POWER)) {
+    for (const act of [ACT_SHOOT_LEFT, ACT_SHOOT_CENTER, ACT_SHOOT_RIGHT]) mask[offset + act] = 1;
+  }
+  if (mayKick("pass", 0)) targets(false);
+  if (mayKick("loft", 0)) targets(true);
+  if (!ownDribble && toBall <= 3) mask[offset + ACT_TACKLE] = 1;
 }
 
 /** Converts a legal choice to an engine intent. Returns undefined requests for "none". */

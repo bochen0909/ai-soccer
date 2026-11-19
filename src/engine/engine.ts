@@ -73,6 +73,7 @@ function endPeriod(state: EngineState): void {
     : { kind: "fullTime" };
   state.ball.control = { kind: "free" };
   delete state.ball.flightAction;
+  delete state.ball.secondTouch;
   state.touchExclusion = null;
   state.nextDribbleTouchTick = 0;
   state.keeperReleaseTick = null;

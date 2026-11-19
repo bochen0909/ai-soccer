@@ -95,6 +95,12 @@ function insidePitch(position: Vec2, pitch: PitchConfig, radius: number): boolea
     Math.abs(position.y) <= pitch.widthM / 2 - radius + tolerance;
 }
 
+/** Inside the field or on the run-off strip around it, where players may stand. */
+function onGround(position: Vec2, pitch: PitchConfig, radius: number): boolean {
+  return Math.abs(position.x) <= pitch.lengthM / 2 + pitch.runOffM - radius + tolerance &&
+    Math.abs(position.y) <= pitch.widthM / 2 + pitch.runOffM - radius + tolerance;
+}
+
 function validatePlayer(definition: PlayerDefinition, pitch: PitchConfig, field: string): void {
   const { abilities } = definition;
   check(definition.role === "outfield" || definition.role === "goalkeeper",
@@ -143,6 +149,7 @@ function validateConfig(config: MatchConfig, seed: number): void {
   for (const key of pitchDimensions) {
     positive(pitch[key], `pitch.${key}`);
   }
+  inRange(pitch.runOffM, 0, Math.min(pitch.lengthM, pitch.widthM), "configuration", "pitch.runOffM");
   check(pitch.goalWidthM + 4 * pitch.postRadiusM <= pitch.widthM,
     "configuration", "pitch.goalWidthM", "goal and posts must fit within the pitch width");
   check(pitch.centerCircleRadiusM <= Math.min(pitch.lengthM, pitch.widthM) / 2,
@@ -235,6 +242,22 @@ export function keeperHoldPosition(player: PlayerState, ballRadiusM: number, pit
   };
 }
 
+/**
+ * Whether `player` is barred from playing the ball by the second-touch rule. A restart taker may not touch it at all
+ * and a keeper who let go of it may not handle it, until another player touches it. Pass `handling` for a keeper save.
+ */
+export function secondTouchBarred(state: EngineState, player: PlayerState, handling = false): boolean {
+  const ban = state.ball.secondTouch;
+  return ban !== undefined && ban.playerId === player.playerId && state.ball.lastTouchPlayerId === ban.playerId &&
+    (handling || !ban.handsOnly);
+}
+
+/** Lifts the second-touch rule once someone else has touched the ball. */
+export function expireSecondTouch(state: EngineState): void {
+  const ban = state.ball.secondTouch;
+  if (ban !== undefined && state.ball.lastTouchPlayerId !== ban.playerId) delete state.ball.secondTouch;
+}
+
 /** Ball centres up to this fraction of body height can be controlled with the feet, thigh or chest; above it is a header. */
 export const CONTROL_HEIGHT_FRACTION = 0.58;
 
@@ -276,8 +299,8 @@ function validateScenarioPlayers(state: EngineState, scenario: ScenarioDefinitio
     byId.delete(input.playerId);
 
     vec2(input.position, "scenario", `${field}.position`);
-    check(insidePitch(input.position, pitch, player.definition.radiusM),
-      "scenario", `${field}.position`, "player body must fit inside the pitch");
+    check(onGround(input.position, pitch, player.definition.radiusM),
+      "scenario", `${field}.position`, "player body must fit inside the pitch and its run-off");
     finite(input.facingRad, "scenario", `${field}.facingRad`);
     const velocity = input.velocity === undefined ? { x: 0, y: 0 } : input.velocity;
     vec2(velocity, "scenario", `${field}.velocity`);

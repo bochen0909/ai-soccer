@@ -4,7 +4,7 @@ import { dispossessChance } from "./ball-control.js";
 import { DIVE_REACH_M, keeperDiveExtension, keeperSaveTiming, keeperSaveVolumes, saveStrain } from "./keeper-save.js";
 import { along, capsuleDistanceSquared, sweepCapsule } from "./physics-geometry.js";
 import type { Capsule } from "./physics-geometry.js";
-import { attackDirection, keeperHoldPosition } from "./reset.js";
+import { attackDirection, keeperHoldPosition, secondTouchBarred } from "./reset.js";
 import { randomUnit } from "./random.js";
 import type { EngineState } from "./reset.js";
 
@@ -97,7 +97,7 @@ export function defenseCandidate(
   let sweepRadius = 0;
   const teammateHasIt = control.kind === "dribble" &&
     players.some((owner) => owner.playerId === control.playerId && owner.teamId === player.teamId);
-  if (teammateHasIt) return undefined;
+  if (teammateHasIt || secondTouchBarred(state, player, request.kind === "keeperSave")) return undefined;
   if (request.kind === "keeperSave") {
     if (isBackPass(state, player)) return undefined;
     if (player.definition.role !== "goalkeeper" || !saveInterval(state, player, times)) return undefined;

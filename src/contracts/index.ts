@@ -64,6 +64,8 @@ export interface PitchConfig {
   keeperAreaDepthM: number;
   keeperAreaWidthM: number;
   centerCircleRadiusM: number;
+  /** Width of the grass beyond the touchlines and goal lines where players may run; the ball there is out of play. */
+  runOffM: number;
 }
 
 export interface BallConfig {
@@ -190,6 +192,11 @@ export interface BallState {
   lastTouchPlayerId: PlayerId | null;
   control: BallControl;
   flightAction?: ActionKey;
+  /**
+   * A player who may not play the ball again until someone else touches it: a restart taker (no touch at all), or a
+   * keeper who released it from their hands (no handling; feet are fine).
+   */
+  secondTouch?: { playerId: PlayerId; handsOnly: boolean };
 }
 
 export type ActionRequest =

@@ -3,7 +3,7 @@ import type { ActionSlots, EventData } from "./actions.js";
 import { executionFactors, footQuality } from "./abilities.js";
 import { capsuleDistanceSquared, playerCapsule, sphereContactTime } from "./physics-geometry.js";
 import { randomUnit } from "./random.js";
-import { controlHeight, inDribbleReach } from "./reset.js";
+import { controlHeight, inDribbleReach, secondTouchBarred } from "./reset.js";
 import type { EngineState } from "./reset.js";
 
 const MAX_RECEIVING_SPEED_MPS = 19;
@@ -68,6 +68,7 @@ export function firstTouchCandidate(
   const { ball, tick, touchExclusion } = state;
   // A ball that just squirted out from between two players is clear of both for a moment.
   if (ball.control.kind !== "free" || (state.bodyClearUntilTick[player.playerId] ?? 0) > tick ||
+      secondTouchBarred(state, player) ||
       (touchExclusion?.playerId === player.playerId && tick < touchExclusion.untilTick)) return undefined;
 
   const ballRadius = state.config.ball.radiusM;
@@ -257,7 +258,8 @@ export function resolveBodyContact(
   const control = ball.control;
 
   if (control.kind === "free") {
-    if (excludedFromTouch(state, player) || slots.get(player.playerId)?.phase === "windup") return false;
+    if (excludedFromTouch(state, player) || slots.get(player.playerId)?.phase === "windup" ||
+        secondTouchBarred(state, player)) return false;
     resolveFirstTouch(state, player, action, events);
     return true;
   }
